@@ -27,12 +27,35 @@ from amelica.portal import AmelicaUploader
 
 JS_BOTONES = r"""() => {
     const out = [];
-    for (const b of document.querySelectorAll('button, input[type=button], input[type=submit], a')) {
+    for (const b of document.querySelectorAll(
+            'button, input[type=button], input[type=submit], a, [onclick]')) {
         if (b.offsetParent === null) continue;
         const txt = (b.innerText || b.textContent || b.value || '').trim();
         if (!txt || txt.length > 40) continue;
         out.push({texto: txt, tag: b.tagName, id: b.id || '',
-                  clase: (b.className || '').slice(0, 60)});
+                  clase: (b.className || '').slice(0, 60),
+                  onclick: (b.getAttribute('onclick') || '').slice(0, 70)});
+    }
+    return out;
+}"""
+
+# El usuario confirmó que el botón que persiste el marcaje es "Guardar".
+# Esto lo busca sin importar el tipo de elemento ni si está oculto, para
+# saber si existe pero no es visible en ese momento.
+JS_GUARDAR = r"""() => {
+    const out = [];
+    for (const el of document.querySelectorAll('*')) {
+        const txt = (el.value || el.innerText || el.textContent || '').trim();
+        if (txt.toLowerCase() !== 'guardar') continue;
+        if (el.children.length > 1) continue;   // evitar contenedores
+        out.push({
+            tag: el.tagName,
+            id: el.id || '',
+            clase: (el.className || '').toString().slice(0, 70),
+            visible: el.offsetParent !== null,
+            onclick: (el.getAttribute('onclick') || '').slice(0, 90),
+            padre_id: el.parentElement ? (el.parentElement.id || '') : '',
+        });
     }
     return out;
 }"""
@@ -113,16 +136,33 @@ async def main() -> int:
 
         # El editor tarda: esperar a que aparezca algo con lo que trabajar
         # en vez de dormir una cantidad fija y esperar lo mejor.
-        print("   ⏳ Esperando el editor...")
-        for intento in range(20):
+        # Esperar la NAVEGACION a marker.oa. Contar botones no sirve: la
+        # pagina del numero ya tiene varios, asi que la espera terminaba
+        # enseguida sin haber salido de issue.oa.
+        print("   ⏳ Esperando navegación al editor (marker.oa)...")
+        for intento in range(25):
             await asyncio.sleep(2)
-            listo = await up.page.evaluate(
-                "() => document.querySelectorAll('button, input[type=button]').length")
-            if listo:
-                print(f"   ✅ Editor con {listo} controles tras {(intento+1)*2}s")
+            if 'marker' in up.page.url.lower():
+                print(f"   ✅ En el editor tras {(intento+1)*2}s")
                 break
         else:
-            print("   ⚠️  El editor no mostró controles")
+            print(f"   ⚠️  Nunca navegó al editor (sigue en {up.page.url})")
+
+        # Aceptar el asistente de inferencias si aparece: mientras el modal
+        # esté encima, el editor real no es accesible.
+        await asyncio.sleep(3)
+        acepto = await up.page.evaluate(r"""() => {
+            for (const a of document.querySelectorAll('a, button')) {
+                const t = (a.innerText || a.textContent || '').trim().toLowerCase();
+                if ((t === 'aceptar' || t === 'continuar') && a.offsetParent !== null) {
+                    a.click(); return t;
+                }
+            }
+            return null;
+        }""")
+        if acepto:
+            print(f"   ✅ Modal '{acepto}' aceptado")
+            await asyncio.sleep(4)
 
         print(f"   URL: {up.page.url}")
 
@@ -136,11 +176,29 @@ async def main() -> int:
         print("BOTONES VISIBLES EN LA PANTALLA DE MARCAJE")
         print("═"*60)
         for b in await up.page.evaluate(JS_BOTONES):
-            print(f"  [{b['tag']:6s}] {b['texto'][:32]:32s} id={b['id'][:28]}")
+            print(f"  [{b['tag']:6s}] {b['texto'][:30]:30s} id={b['id'][:26]:26s} "
+                  f"{b['onclick'][:30]}")
 
-        # Ir a "Datos del artículo" para inspeccionar las fechas
-        await up._click_tab('datos')
-        await asyncio.sleep(3)
+        print("\n" + "═"*60)
+        print("ELEMENTOS 'GUARDAR' (visibles y ocultos)")
+        print("═"*60)
+        guardar = await up.page.evaluate(JS_GUARDAR)
+        if not guardar:
+            print("  (ninguno)")
+        for g in guardar:
+            print(f"  [{g['tag']:6s}] visible={str(g['visible']):5s} id={g['id'][:34]}")
+            print(f"           clase={g['clase'][:60]}")
+            if g['onclick']:
+                print(f"           onclick={g['onclick']}")
+
+        # Ir a "Datos del artículo" — mismo texto que usa fill_front_matter
+        await up._click_tab('datos del artículo')
+        await asyncio.sleep(4)
+
+        # Desplegar la sección de Fechas: las cajas pueden no existir en el
+        # DOM hasta que se activa el contenedor.
+        await up._click_caja('Fechas')
+        await asyncio.sleep(2)
 
         print("\n" + "═"*60)
         print("CAJAS DE FECHA — ¿dónde viven sus controles?")
@@ -162,6 +220,39 @@ async def main() -> int:
         print("═"*60)
         ctl = await up.page.evaluate(JS_CONTROLES_FECHA)
         print(json.dumps(ctl, indent=2, ensure_ascii=False)[:1800])
+
+        # Lo que realmente hace falta saber: dado un control de fecha, ¿cuál
+        # es el ancestro que lo agrupa con SU caja [title^="Fecha"]? Eso es
+        # lo que permite apuntar a la fecha correcta en vez de al último
+        # control del documento.
+        print("\n" + "═"*60)
+        print("RUTA DESDE CADA CONTROL HASTA SU CAJA DE FECHA")
+        print("═"*60)
+        rutas = await up.page.evaluate(r"""() => {
+            const inps = [...document.querySelectorAll('input[class*="date-"]')]
+                .filter(el => el.offsetParent !== null && el.type !== 'hidden');
+            return inps.map(inp => {
+                const cadena = [];
+                let nodo = inp, nivel = 0, cajaTitulo = null, nivelCaja = -1;
+                while (nodo && nivel < 12) {
+                    const t = nodo.getAttribute && nodo.getAttribute('title');
+                    cadena.push(nodo.tagName +
+                        (nodo.id ? '#' + nodo.id.slice(-24) : '') +
+                        (t ? '[title=' + t + ']' : ''));
+                    if (t && t.startsWith('Fecha') && cajaTitulo === null) {
+                        cajaTitulo = t; nivelCaja = nivel;
+                    }
+                    nodo = nodo.parentElement; nivel++;
+                }
+                return {input: inp.id.slice(-30), caja: cajaTitulo,
+                        niveles_hasta_caja: nivelCaja, cadena: cadena};
+            });
+        }""")
+        for r in rutas:
+            print(f"\n  input …{r['input']}")
+            print(f"    caja de fecha: {r['caja']!r} a {r['niveles_hasta_caja']} niveles arriba")
+            for paso in r['cadena'][:8]:
+                print(f"      ↑ {paso[:78]}")
 
         print("\n✅ Inspección terminada — no se modificó nada")
         return 0

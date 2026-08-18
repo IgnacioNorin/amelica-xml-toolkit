@@ -39,6 +39,55 @@ class FrontMatterMixin:
             });
         }""")
 
+    async def _contar_campos_fecha(self) -> int:
+        """Cuántos campos de fecha visibles hay, con el MISMO selector que
+        usa el llenado — contar de otra forma es engañarse."""
+        return await self.page.evaluate("""() => {
+            return [...document.querySelectorAll('input.date-526564616c7963')]
+                .filter(el => el.offsetParent !== null && el.type !== 'hidden')
+                .length;
+        }""")
+
+    async def _set_date_type(self, idx: int, valor: str) -> str:
+        """Elige el tipo ('accepted'/'pub') en el select de la fecha nº idx.
+
+        Se apunta por indice sobre la lista plana de selects, en orden del
+        DOM. Antes se usaba .at(-1) -- el ultimo del documento -- sin mirar
+        que fecha se estaba llenando, asi que las dos fechas escribian en el
+        mismo control y la segunda pisaba a la primera.
+        """
+        return await self.page.evaluate("""([idx, val]) => {
+            const sels = [...document.querySelectorAll(
+                    'select.date-type-526564616c7963')]
+                .filter(el => el.offsetParent !== null);
+            const sel = sels[idx];
+            if (!sel) return 'no-select-' + idx + '-de-' + sels.length;
+            sel.value = val;
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+            return 'ok-' + val;
+        }""", [idx, valor])
+
+    async def _open_date_picker(self, idx: int) -> str:
+        """Abre el datepicker del input de la fecha nº idx y devuelve su id.
+
+        Clase EXACTA date-526564616c7963: hay otros inputs cuyo nombre de
+        clase contiene "date-" (iso-8601-date-, open-data-date-, conf-date-)
+        y no son el campo de fecha del articulo.
+
+        El id devuelto es el 'dp<timestamp>' que le pone jQuery UI. Si dos
+        fechas devuelven el MISMO id, se esta escribiendo dos veces en el
+        mismo lugar.
+        """
+        return await self.page.evaluate("""(idx) => {
+            const inps = [...document.querySelectorAll(
+                    'input.date-526564616c7963')]
+                .filter(el => el.offsetParent !== null && el.type !== 'hidden');
+            const inp = inps[idx];
+            if (!inp) return 'no-input-' + idx + '-de-' + inps.length;
+            inp.click();
+            return 'ok-' + inp.id;
+        }""", idx)
+
     async def _borrar_autores_sobrantes(self, solo_vacios: bool = True) -> dict:
         """Borra los bloques de autor sobrantes (todos menos el primero).
 
@@ -429,6 +478,30 @@ class FrontMatterMixin:
                 print(f"\n   🗑️  Eliminadas {deleted_dates} fecha(s) pre-existente(s)")
                 await asyncio.sleep(0.4 * deleted_dates)
 
+        # Verificar cuántos campos de fecha quedaron REALMENTE, con el mismo
+        # selector que usa el llenado.
+        #
+        # Esto es lo que fallaba: si queda un solo campo para dos fechas, la
+        # segunda terminaba escribiendo sobre la primera y el artículo
+        # quedaba con el año de publicación en el campo de aceptado. Se
+        # cuenta antes de escribir, y si faltan se intenta crearlas.
+        disponibles = await self._contar_campos_fecha()
+        if disponibles < len(dates_ordered):
+            faltan = len(dates_ordered) - disponibles
+            print(f"\n   ⚠️  Hay {disponibles} campo(s) de fecha para "
+                  f"{len(dates_ordered)} fecha(s) — creando {faltan} más...")
+            for _ in range(faltan):
+                await self._click_caja('Fechas')
+                if await self._click_menu_button('Fecha'):
+                    await asyncio.sleep(0.6)
+            disponibles = await self._contar_campos_fecha()
+            print(f"   ℹ️  Ahora hay {disponibles} campo(s) de fecha")
+
+        if disponibles < len(dates_ordered):
+            self._fm_problemas.append(
+                f"solo hay {disponibles} campo(s) de fecha para "
+                f"{len(dates_ordered)}: no se pudieron crear las que faltan")
+
         # Ahora llenar cada fecha nueva (son las únicas que quedan, en orden)
         dp_usados = set()
         for date_idx, (date_key, type_value) in enumerate(dates_ordered):
@@ -447,35 +520,15 @@ class FrontMatterMixin:
             # la primera: el articulo quedaba con el año de publicacion en el
             # campo de aceptado. Ahora se busca dentro del contenedor que
             # corresponde al indice.
-            type_set = await self.page.evaluate("""([idx, val]) => {
-                const cajas = [...document.querySelectorAll('[title]')]
-                    .filter(el => el.offsetParent !== null &&
-                                  (el.getAttribute('title') || '').startsWith('Fecha'));
-                const caja = cajas[idx];
-                if (!caja) return 'no-caja-' + idx;
-                const sel = [...caja.querySelectorAll('select')]
-                    .filter(el => el.className.includes('date-type-'))[0];
-                if (!sel) return 'no-select';
-                sel.value = val;
-                sel.dispatchEvent(new Event('change', {bubbles: true}));
-                return 'ok-' + val;
-            }""", [date_idx, type_value])
+            type_set = await self._set_date_type(date_idx, type_value)
             print(f"      {'✅' if type_set.startswith('ok') else '⚠️ '} Tipo: {type_set}")
             await asyncio.sleep(0.3)
 
             # Abrir el datepicker del input DE ESTA caja (mismo motivo).
-            dp_opened = await self.page.evaluate("""(idx) => {
-                const cajas = [...document.querySelectorAll('[title]')]
-                    .filter(el => el.offsetParent !== null &&
-                                  (el.getAttribute('title') || '').startsWith('Fecha'));
-                const caja = cajas[idx];
-                if (!caja) return 'no-caja-' + idx;
-                const inp = [...caja.querySelectorAll('input.date-526564616c7963')]
-                    .filter(el => el.offsetParent !== null && el.type !== 'hidden')[0];
-                if (!inp) return 'no-input';
-                inp.click();
-                return 'ok-' + inp.id;
-            }""", date_idx)
+            # Clase EXACTA: hay otros inputs cuyo nombre de clase contiene
+            # "date-" (iso-8601-date-, open-data-date-, conf-date-) y no son
+            # el campo de fecha del artículo.
+            dp_opened = await self._open_date_picker(date_idx)
             print(f"      {'✅' if dp_opened.startswith('ok') else '⚠️ '} Datepicker: {dp_opened}")
             await asyncio.sleep(0.4)
 

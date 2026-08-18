@@ -23,12 +23,12 @@ MARKER_VERSION = "2026-08-07-solo-h1"
 class AmelicaMarker:
     """Automatiza el marcaje de secciones en el editor de AmeliCA XML."""
 
-    def __init__(self, page, headless: bool = False, auto_inferir: bool = True):
+    def __init__(self, page, headless: bool = False, auto_guardar: bool = True):
         self.page     = page
         self.headless = headless
-        # "Inferir" es lo que persiste el marcaje. Por defecto se hace
+        # "Guardar" es lo que persiste el marcaje. Por defecto se hace
         # siempre: no depende de si el navegador esta visible o no.
-        self.auto_inferir = auto_inferir
+        self.auto_guardar = auto_guardar
         self._sections_cache = []  # Cache de secciones extraídas
 
     # ── Punto de entrada ─────────────────────────────────────────
@@ -148,27 +148,37 @@ class AmelicaMarker:
         # Paso 6: Verificar y manejar amarillos
         await self._handle_verification()
 
-        # Paso 7: Click en "Inferir" — es lo que persiste el marcaje.
+        # Paso 7: Click en "Guardar" — es lo que persiste el marcaje.
         #
-        # Antes esto estaba detras de `if self.headless`, asi que corriendo
-        # con --show (el modo recomendado) el marcaje NO se guardaba: al
-        # volver a entrar al articulo estaba todo perdido. El modo de
-        # visualizacion no puede cambiar si el trabajo se guarda o no.
-        if self.auto_inferir:
-            if not await self._click_inferir():
-                # Sin ese click el marcaje NO queda guardado, asi que esto
-                # es un fallo del marcaje aunque las secciones se hayan
-                # marcado bien en pantalla.
-                print("\n   ❌ Marcaje NO guardado: no se encontró 'Inferir'.")
-                print("      Las secciones se marcaron pero se pierden al salir.")
-                print("      Guardalo a mano en el navegador.")
-                return False
-            print("\n   ✅ Marcaje completado y enviado a inferir")
-        else:
-            print("\n   ✅ Marcaje completado — SIN guardar (--no-inferir).")
-            print("      Hacé click en 'Inferir' en el navegador o se pierde.")
+        # Antes se buscaba "Inferir", que no existe en esta pantalla, y
+        # ademas estaba detras de `if self.headless`: corriendo con --show
+        # (el modo recomendado) el marcaje no se guardaba nunca y al volver
+        # a entrar estaba todo perdido. El modo de visualizacion no puede
+        # cambiar si el trabajo se guarda o no.
+        if not self.auto_guardar:
+            print("\n   ✅ Marcaje completado — SIN guardar (--no-guardar).")
+            print("      Hacé click en 'Guardar' en el navegador o se pierde.")
+            return True
 
-        return True
+        if not await self._click_guardar():
+            print("\n   ❌ Marcaje NO guardado.")
+            print("      Las secciones se marcaron pero se pierden al salir.")
+            print("      Guardalo a mano en el navegador.")
+            return False
+
+        # Comprobar que quedó realmente guardado, no solo que el click salió.
+        persistio = await self._verificar_persistencia()
+        if persistio is True:
+            print("\n   ✅ Marcaje guardado y verificado tras recargar")
+            return True
+        if persistio is False:
+            print("\n   ❌ Se guardó pero al recargar las secciones NO están.")
+            print("      Revisá el artículo en el navegador.")
+            return False
+
+        print("\n   ⚠️  Marcaje guardado, pero no se pudo verificar la recarga.")
+        print("      Confirmá a mano que las secciones quedaron.")
+        return False
 
     # ── Aceptar modal del asistente ───────────────────────────────
 
@@ -867,11 +877,98 @@ class AmelicaMarker:
 
     # ── Inferir ──────────────────────────────────────────────────
 
-    async def _click_inferir(self) -> bool:
-        """Click en el botón 'Inferir' — es lo que persiste el marcaje.
+    #: Botón "Guardar" del editor. Confirmado inspeccionando el DOM real:
+    #: es un <a> cuyo onclick llama a salvarContenido(). Los vecinos son
+    #: buttonRepo (Respaldos) y buttonC (Finalizar) — no confundir.
+    SAVE_BUTTON_ID = 'save-526564616c7963:buttonS'
+    #: Spinner que JSF muestra mientras procesa el guardado.
+    WAIT_SPINNER_ID = 'wait-526564616c7963'
 
-        Devuelve True solo si realmente encontró y clickeó el botón: quien
-        llama necesita saberlo, porque sin ese click el trabajo se pierde.
+    async def _click_guardar(self) -> bool:
+        """Click en 'Guardar' — es lo que persiste el marcaje.
+
+        Antes se buscaba 'Inferir', que no existe en esta pantalla: por eso
+        el marcaje se perdía. Devuelve True solo si encontró y clickeó el
+        botón; quien llama necesita saberlo.
+        """
+        print("\n   💾 Guardando el marcaje...")
+
+        clicked = await self.page.evaluate(r"""(saveId) => {
+            const el = document.getElementById(saveId);
+            if (el) { el.click(); return 'by-id'; }
+            for (const a of document.querySelectorAll('a, button')) {
+                const t = (a.innerText || a.textContent || '').trim();
+                if (t === 'Guardar' && a.offsetParent !== null) {
+                    a.click(); return 'by-text';
+                }
+            }
+            return null;
+        }""", self.SAVE_BUTTON_ID)
+
+        if not clicked:
+            print("   ⚠️  No se encontró el botón 'Guardar'")
+            return False
+        print(f"   ✅ Click en 'Guardar' ({clicked})")
+
+        # Esperar a que el spinner de JSF aparezca y vuelva a ocultarse: si
+        # cerramos antes, el guardado queda a medias y se pierde el trabajo.
+        await asyncio.sleep(1.5)
+        try:
+            await self.page.wait_for_function(
+                """(id) => {
+                    const w = document.getElementById(id);
+                    return !w || w.offsetParent === null;
+                }""", arg=self.WAIT_SPINNER_ID, timeout=90_000)
+        except Exception:
+            print("   ⚠️  El indicador de guardado no terminó en 90s")
+            return False
+
+        try:
+            await self.page.wait_for_load_state('networkidle', timeout=30_000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        return True
+
+    async def _verificar_persistencia(self) -> bool | None:
+        """Recarga el editor y comprueba que las secciones sigan ahí.
+
+        Devuelve True/False si pudo comprobarlo, o None si no pudo (por
+        ejemplo si la recarga no vuelve al editor). None NO es éxito: se
+        informa como "no verificado" en vez de dar el guardado por bueno.
+        """
+        try:
+            await self.page.reload(wait_until='networkidle', timeout=60_000)
+            await asyncio.sleep(3)
+
+            # Aceptar el asistente si reaparece tras la recarga
+            await self.page.evaluate(r"""() => {
+                for (const a of document.querySelectorAll('a, button')) {
+                    const t = (a.innerText || a.textContent || '').trim().toLowerCase();
+                    if (t === 'aceptar' && a.offsetParent !== null) { a.click(); return; }
+                }
+            }""")
+            await asyncio.sleep(3)
+
+            if 'marker' not in (self.page.url or '').lower():
+                return None
+
+            secciones = await self.page.evaluate(r"""() => {
+                const t = [...document.querySelectorAll('#intArbol .txtarea')];
+                if (!t.length) return null;
+                return t.map(x => (x.value || '').trim()).filter(Boolean);
+            }""")
+            if secciones is None:
+                return None
+            return len(secciones) > 0
+        except Exception as e:
+            print(f"   ℹ️  No se pudo verificar la persistencia: {e}")
+            return None
+
+    async def _click_inferir(self) -> bool:
+        """Click en el botón 'Inferir' (pantalla de inferencia, no la de
+        marcaje). Se conserva por si hace falta, pero NO es lo que guarda:
+        para eso está _click_guardar().
         """
         print("\n   🚀 Haciendo click en 'Inferir'...")
 
