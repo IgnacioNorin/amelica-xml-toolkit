@@ -379,24 +379,39 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         o href puede ser posicional ("marcar(0)", "marcar(1)") y correrse
         cuando el portal inserta el artículo nuevo, con lo cual "el bloque
         nuevo" terminaría siendo el viejo — justo el caso que hay que evitar.
+
+        Ojo: en AmeliCA los ids TAMBIÉN son posicionales
+        ("j_idt66:0:j_idt77:3:form-opciones" — ese 3 es la fila). Si el
+        artículo se agrega al final aparece una sola clave nueva y se
+        identifica bien; si se inserta en el medio, todas las filas de abajo
+        cambian de id, aparecen varias "nuevas" y esto aborta. Además, por
+        las dudas, se exige que el bloque elegido tenga efectivamente el
+        título que buscamos: sin esa guarda, un id nuevo podría corresponder
+        a un artículo ajeno que solo se corrió de lugar.
         """
         homonimos = cls._titulos_coincidentes(antes, titulo)
+        needle = (titulo or '')[:50].lower().strip()
 
         def nuevos_por(campo):
             previas = {b[campo] for b in antes if b.get(campo)}
             return [b for b in despues if b.get(campo) and b[campo] not in previas]
 
+        def con_titulo_esperado(bloques):
+            if not needle:
+                return bloques
+            return [b for b in bloques if needle in b.get('titulo', '').lower()]
+
         if homonimos:
-            estables = nuevos_por('id_estable')
-            if len(estables) == 1:
-                return ('clave', estables[0]['id_estable'])
+            candidatos = con_titulo_esperado(nuevos_por('id_estable'))
+            if len(candidatos) == 1:
+                return ('clave', candidatos[0]['id_estable'])
             return ('abortar',
                     f'{homonimos} artículo(s) con el mismo título ya presentes '
-                    f'y {len(estables)} bloque(s) nuevo(s) con id estable')
+                    f'y {len(candidatos)} bloque(s) nuevo(s) que coincidan')
 
-        nuevos = nuevos_por('clave')
-        if len(nuevos) == 1:
-            return ('clave', nuevos[0]['clave'])
+        candidatos = con_titulo_esperado(nuevos_por('clave'))
+        if len(candidatos) == 1:
+            return ('clave', candidatos[0]['clave'])
         return ('titulo', '')
 
     @staticmethod

@@ -90,6 +90,41 @@ def test_varios_bloques_nuevos_con_homonimo_aborta():
     assert AmelicaUploader.decidir_articulo_a_marcar(antes, despues, TITULO)[0] == "abortar"
 
 
+def test_ids_posicionales_que_se_corren_abortan():
+    """AmeliCA usa ids con el número de fila adentro
+    ('j_idt66:0:j_idt77:3:form-opciones'). Si el artículo se inserta en el
+    medio, todas las filas de abajo cambian de id: aparecen varios bloques
+    'nuevos' y hay que abortar en vez de adivinar.
+    """
+    fila = lambda n, t: bloque(f"j_idt66:0:j_idt77:{n}:form-opciones", t)
+    antes = [fila(0, "Artículo A"), fila(1, TITULO), fila(2, "Artículo C")]
+    # Se inserta en la posición 1 → las filas 1 y 2 se corren a 2 y 3
+    despues = [fila(0, "Artículo A"), fila(1, TITULO),
+               fila(2, TITULO), fila(3, "Artículo C")]
+    estrategia, _ = AmelicaUploader.decidir_articulo_a_marcar(antes, despues, TITULO)
+    assert estrategia == "abortar"
+
+
+def test_id_nuevo_con_titulo_ajeno_no_se_elige():
+    """Guarda extra: un id nuevo cuyo bloque tiene OTRO título no puede ser
+    el artículo que acabamos de crear, aunque sea el único id nuevo."""
+    antes = [bloque("art-1", TITULO)]
+    despues = antes + [bloque("art-9", "Un artículo totalmente distinto")]
+    estrategia, _ = AmelicaUploader.decidir_articulo_a_marcar(antes, despues, TITULO)
+    assert estrategia == "abortar"
+
+
+def test_agregado_al_final_se_identifica_bien():
+    """El caso normal en AmeliCA: el artículo nuevo va al final y las filas
+    existentes conservan su id."""
+    fila = lambda n, t: bloque(f"j_idt66:0:j_idt77:{n}:form-opciones", t)
+    antes = [fila(0, "Artículo A"), fila(1, "Artículo B")]
+    despues = antes + [fila(2, TITULO)]
+    estrategia, clave = AmelicaUploader.decidir_articulo_a_marcar(antes, despues, TITULO)
+    assert estrategia == "clave"
+    assert clave.endswith(":2:form-opciones")
+
+
 @pytest.mark.parametrize("titulos,esperado", [
     ([TITULO], 1),
     ([TITULO, TITULO], 2),
