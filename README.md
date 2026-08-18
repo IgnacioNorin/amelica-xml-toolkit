@@ -122,10 +122,30 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 |---|---|
 | Login y detección de números | Verificado en vivo (`tools/smoke_test.py`) |
 | Subida del ZIP y alta del artículo | Funciona, usado en producción |
-| Marcaje de secciones | Funciona |
 | Parser de referencias | Validado: 376 refs sobre 12 artículos, con tests |
-| Datos del artículo (front matter) | Funciona, pero no verificado exhaustivamente en vivo |
+| Marcaje de secciones | Marca bien; **el guardado se arregló pero falta verificarlo en vivo** |
+| Datos del artículo (front matter) | Funciona; **el arreglo de fechas falta verificarlo en vivo** |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
+
+### Pendiente de verificar (2026-08-18)
+
+Dos arreglos quedaron escritos y con tests, pero **sin confirmar contra el
+portal**: las dos corridas siguientes fallaron antes de llegar, con el editor
+sin cargar el artículo (`el editor de marcaje no respondió`). Antes de
+confiar en ellos, hacer una corrida limpia y mirar estos dos puntos:
+
+1. **Guardado del marcaje.** El botón es `save-526564616c7963:buttonS`
+   (`salvarContenido()`), no "Inferir" — buscar ese error era la causa de que
+   el marcaje se perdiera al reentrar. Ahora, tras guardar, se recarga el
+   editor para comprobar que las secciones siguen ahí. Verificar que el log
+   diga `Marcaje guardado y verificado tras recargar`.
+2. **Fechas.** El síntoma era el año de publicación en el campo de aceptado.
+   Causa: existía **un solo** campo de fecha y ambas escribían ahí. Ahora se
+   cuenta antes de escribir y se intentan crear las que falten. Verificar que
+   las dos fechas reporten ids `dp…` **distintos**.
+
+También quedó sin resolver que el alta no completa el campo *Sección*
+(`ID no encontrado en la pagina: seccion`).
 
 ### Protecciones contra sobrescritura
 
