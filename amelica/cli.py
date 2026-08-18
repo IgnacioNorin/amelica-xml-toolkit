@@ -105,7 +105,11 @@ async def cmd_upload(args):
         email=email, password=password, headless=not args.show,
         fill_refs=args.referencias,
     )
-    await uploader.run(input_path=str(input_path), article_data=data, keep_zip=args.keep_zip, target_volume=volume)
+    ok = await uploader.run(input_path=str(input_path), article_data=data,
+                            keep_zip=args.keep_zip, target_volume=volume)
+    # Salir con codigo != 0 si alguna etapa fallo: antes siempre salia 0,
+    # aunque el marcaje y el front matter se hubieran caido.
+    return 0 if ok else 1
 
 
 async def cmd_batch(args):
@@ -142,9 +146,12 @@ async def cmd_batch(args):
             err.append(fpath.name)
 
     print(f"\n{'═'*55}")
-    print(f"📊 RESUMEN: {len(ok)} OK  |  {len(err)} errores")
+    print(f"📊 RESUMEN: {len(ok)} OK  |  {len(err)} con etapas fallidas")
     for n in ok:  print(f"   ✅ {n}")
     for n in err: print(f"   ❌ {n}")
+    print("   (❌ no significa que no se creó el artículo: puede estar creado")
+    print("    pero incompleto. Revisá el detalle por etapa de cada uno.)")
+    return 0 if not err else 1
 
 
 # ─────────────────────────────────────────────
@@ -211,21 +218,24 @@ def cmd_zip(args):
     from .parsing import build_zip_from_docx
     input_path = Path(args.input)
     if not input_path.exists():
-        print(f"❌ Archivo no encontrado: {input_path}"); return
+        print(f"❌ Archivo no encontrado: {input_path}"); return 1
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n📄 Convirtiendo: {input_path.name}")
     zip_path = build_zip_from_docx(str(input_path), output_dir=str(output_dir))
     print(f"\n✅ ZIP guardado en: {zip_path}")
     print(f"   Puedes abrirlo con WinRAR/7-Zip para inspeccionar el contenido.")
+    return 0
 
 
 def main():
     parser = build_parser()
     args   = parser.parse_args()
-    if   args.command == 'upload': asyncio.run(cmd_upload(args))
-    elif args.command == 'batch':  asyncio.run(cmd_batch(args))
-    elif args.command == 'zip':    cmd_zip(args)
+    if   args.command == 'upload': code = asyncio.run(cmd_upload(args))
+    elif args.command == 'batch':  code = asyncio.run(cmd_batch(args))
+    elif args.command == 'zip':    code = cmd_zip(args)
+    else:                          code = 1
+    sys.exit(code or 0)
 
 
 if __name__ == '__main__':

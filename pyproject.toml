@@ -15,7 +15,7 @@ idml = ["flask>=3.0"]
 # Conversion DOCX -> HTML usando Microsoft Word instalado. Opcional: si falta,
 # zip_tools cae al conversor propio (ver build_zip_from_docx).
 word = ["pywin32>=306"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 amelica = "amelica.cli:main"

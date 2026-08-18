@@ -51,6 +51,58 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         self.page                = None
         self.browser             = None
         self._last_article_title = ''
+        # Resultado real de cada etapa. Antes el flujo imprimia "completado"
+        # y devolvia True aunque el marcaje y el front matter hubieran
+        # fallado; ahora cada etapa deja registro y run() reporta la verdad.
+        self.steps: dict[str, tuple[bool, str]] = {}
+
+    # ── Registro de estado por etapa ─────────────────────────────
+
+    #: Etapas cuyo fallo hace fallar la corrida entera. El resto (marcaje,
+    #: front matter, referencias) degrada a "incompleto": el articulo quedo
+    #: creado y se puede terminar a mano, pero NO es un exito.
+    CRITICAL_STEPS = ('login', 'issue', 'article', 'zip')
+
+    def _step(self, name: str, ok: bool, detail: str = '') -> bool:
+        """Registra el resultado de una etapa y lo devuelve, para poder
+        escribir `if not self._step('zip', await self.upload_zip(...)):`."""
+        self.steps[name] = (ok, detail)
+        return ok
+
+    @property
+    def succeeded(self) -> bool:
+        """True solo si todas las etapas registradas salieron bien."""
+        return bool(self.steps) and all(ok for ok, _ in self.steps.values())
+
+    def print_summary(self) -> None:
+        etiquetas = {
+            'login':        'Login',
+            'issue':        'Selección del número',
+            'article':      'Alta del artículo',
+            'zip':          'Subida del ZIP',
+            'marcar':       'Apertura del editor',
+            'marker':       'Marcaje de secciones',
+            'front_matter': 'Datos del artículo',
+            'references':   'Referencias',
+        }
+        print("\n" + "═"*55)
+        print("📊 RESULTADO POR ETAPA")
+        print("═"*55)
+        for clave, etiqueta in etiquetas.items():
+            if clave not in self.steps:
+                continue
+            ok, detail = self.steps[clave]
+            print(f"   {'✅' if ok else '❌'} {etiqueta:24s}{' — ' + detail if detail else ''}")
+
+        fallidas = [k for k, (ok, _) in self.steps.items() if not ok]
+        if not fallidas:
+            print("\n🎉 Proceso completado — todas las etapas OK")
+        elif any(k in self.CRITICAL_STEPS for k in fallidas):
+            print("\n💥 El proceso FALLÓ en una etapa crítica.")
+        else:
+            print("\n⚠️  Artículo creado pero INCOMPLETO — terminá a mano las")
+            print("   etapas marcadas con ❌ en el navegador.")
+        print("═"*55)
 
     # ── Ciclo de vida ────────────────────────────────────────────
 
@@ -272,8 +324,102 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
     # ── Agregar artículo ─────────────────────────────────────────
 
+    async def _snapshot_article_blocks(self) -> list[dict]:
+        """Foto de los artículos ya listados en el número: una clave estable
+        por bloque, para poder distinguir después cuál es el recién creado.
+
+        Sin esto, 'Marcar' se buscaba por texto del título y clickeaba el
+        primer match del DOM. Si el artículo ya existía en el número, abría
+        el viejo — y el front matter lo sobrescribía.
+
+        Devuelve por bloque:
+          titulo      texto del título
+          clave       mejor identificador disponible (id, onclick o href)
+          id_estable  SOLO id de elemento — nunca onclick/href, que pueden
+                      ser posicionales y correrse al insertarse un artículo
+        """
+        return await self.page.evaluate(r"""() => {
+            const linkMarcar = (b) => {
+                for (const a of b.querySelectorAll('a')) {
+                    if ((a.innerText || a.textContent || '').trim() === 'Marcar') return a;
+                }
+                return null;
+            };
+            const out = [];
+            document.querySelectorAll('div.articulo').forEach((b) => {
+                const t = b.querySelector('.titulo-articulo');
+                const m = linkMarcar(b);
+                const idEstable = b.id || (m && m.id) || '';
+                out.push({
+                    titulo: (t ? (t.innerText || t.textContent || '') : '')
+                                .replace(/\s+/g, ' ').trim(),
+                    id_estable: idEstable,
+                    clave: idEstable
+                        || (m && (m.getAttribute('onclick') || m.getAttribute('href')))
+                        || '',
+                });
+            });
+            return out;
+        }""")
+
+    @classmethod
+    def decidir_articulo_a_marcar(cls, antes: list[dict], despues: list[dict],
+                                  titulo: str) -> tuple[str, str]:
+        """Decide sobre qué artículo abrir el editor. Función pura, sin DOM.
+
+        Devuelve (estrategia, dato):
+          ('clave', k)   → se identificó un único bloque nuevo: abrir ese.
+          ('titulo', '') → no hay claves utilizables, pero ningún artículo
+                           previo tenía este título, así que el match por
+                           texto es necesariamente el nuestro.
+          ('abortar', motivo) → ambiguo. NO tocar nada: abrir el equivocado
+                           sobrescribe un artículo ya publicado.
+
+        Con homónimos presentes solo se aceptan ids de elemento: un onclick
+        o href puede ser posicional ("marcar(0)", "marcar(1)") y correrse
+        cuando el portal inserta el artículo nuevo, con lo cual "el bloque
+        nuevo" terminaría siendo el viejo — justo el caso que hay que evitar.
+        """
+        homonimos = cls._titulos_coincidentes(antes, titulo)
+
+        def nuevos_por(campo):
+            previas = {b[campo] for b in antes if b.get(campo)}
+            return [b for b in despues if b.get(campo) and b[campo] not in previas]
+
+        if homonimos:
+            estables = nuevos_por('id_estable')
+            if len(estables) == 1:
+                return ('clave', estables[0]['id_estable'])
+            return ('abortar',
+                    f'{homonimos} artículo(s) con el mismo título ya presentes '
+                    f'y {len(estables)} bloque(s) nuevo(s) con id estable')
+
+        nuevos = nuevos_por('clave')
+        if len(nuevos) == 1:
+            return ('clave', nuevos[0]['clave'])
+        return ('titulo', '')
+
+    @staticmethod
+    def _titulos_coincidentes(bloques: list[dict], titulo: str) -> int:
+        """Cuántos bloques ya tienen ese título (mismo criterio que usaba la
+        búsqueda vieja: los primeros 50 caracteres, sin distinguir mayúsculas)."""
+        needle = (titulo or '')[:50].lower().strip()
+        if not needle:
+            return 0
+        return sum(1 for b in bloques if needle in b['titulo'].lower())
+
     async def add_article(self, data: dict) -> bool:
         print("\n📝 Abriendo formulario 'Nuevo artículo'...")
+
+        # Foto ANTES de crear nada: es lo que después permite saber cuál de
+        # los artículos del listado es el nuestro.
+        self._blocks_before = await self._snapshot_article_blocks()
+        ya_existian = self._titulos_coincidentes(
+            self._blocks_before, data.get('title', ''))
+        if ya_existian:
+            print(f"   ⚠️  Ojo: ya hay {ya_existian} artículo(s) con ese título en el número.")
+            print("      Se va a crear igual, pero el editor solo se abrirá si")
+            print("      se puede identificar sin ambigüedad cuál es el nuevo.")
 
         try:
             await self.page.wait_for_selector(
@@ -408,6 +554,56 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
         return True
 
+    # ── Apertura del editor ("Marcar") ───────────────────────────
+
+    async def _click_marcar_por_clave(self, clave: str) -> bool:
+        """Clickea 'Marcar' en el bloque cuya clave coincida exactamente."""
+        return await self.page.evaluate(r"""(clave) => {
+            for (const b of document.querySelectorAll('div.articulo')) {
+                let marcar = null;
+                for (const a of b.querySelectorAll('a')) {
+                    if ((a.innerText || a.textContent || '').trim() === 'Marcar') {
+                        marcar = a; break;
+                    }
+                }
+                if (!marcar) continue;
+                // Acepta cualquiera de los identificadores con los que se
+                // pudo haber tomado la foto (id de bloque, id del link, o
+                // su onclick/href como ultimo recurso).
+                const candidatos = [
+                    b.id,
+                    marcar.id,
+                    marcar.getAttribute('onclick'),
+                    marcar.getAttribute('href'),
+                ].filter(Boolean);
+                if (candidatos.includes(clave)) { marcar.click(); return true; }
+            }
+            return false;
+        }""", clave)
+
+    async def _click_marcar_por_titulo(self, titulo: str) -> bool:
+        """Clickea 'Marcar' buscando por texto del título.
+
+        Solo es seguro cuando se verificó antes que ningún artículo previo
+        tenía ese título — si no, puede abrir el equivocado.
+        """
+        return await self.page.evaluate(r"""(titulo) => {
+            const needle = titulo.substring(0, 50).toLowerCase().trim();
+            if (!needle) return false;
+            for (const b of document.querySelectorAll('div.articulo')) {
+                const t = b.querySelector('.titulo-articulo');
+                if (!t) continue;
+                const txt = (t.innerText || t.textContent || '').toLowerCase();
+                if (!txt.includes(needle)) continue;
+                for (const a of b.querySelectorAll('a')) {
+                    if ((a.innerText || a.textContent || '').trim() === 'Marcar') {
+                        a.click(); return true;
+                    }
+                }
+            }
+            return false;
+        }""", titulo)
+
     # ── Subir ZIP ────────────────────────────────────────────────
 
     async def upload_zip(self, zip_path: str) -> bool:
@@ -464,12 +660,14 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             }""")
             if mostrar:
                 print(f"   ✅ ZIP aceptado tras {attempt+1}s: {mostrar[:80]}")
+                self._step('zip', True)
                 await asyncio.sleep(2)
                 break
             if attempt % 5 == 4:
                 print(f"   ⏳ Esperando... ({attempt+1}s)")
         else:
             print("   ⚠️  Timeout esperando confirmación del ZIP — continuando igual")
+            self._step('zip', False, 'timeout de 60s sin confirmación del servidor')
 
         # Cerrar modal ZIP
         print("   🔒 Cerrando modal ZIP (click en X)...")
@@ -505,34 +703,43 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         print("   ✅ Modal artículo cerrado — esperando 6s...")
         await asyncio.sleep(6)
 
-        # Click en "Marcar"
+        # Click en "Marcar" — sobre el artículo que ACABAMOS de crear.
+        #
+        # Se identifica por diferencia contra la foto tomada en add_article,
+        # no por texto del título: si el número ya tenía un artículo con el
+        # mismo nombre, la búsqueda por texto abría el viejo y el front
+        # matter lo sobrescribía (llegó a borrar autores reales).
         titulo = self._last_article_title or ''
-        print(f"   🎯 Buscando 'Marcar' para: {titulo[:60]}...")
+        print(f"\n   🎯 Identificando el artículo recién creado...")
 
-        marcar_clicked = await self.page.evaluate("""(titulo) => {
-            const needle = titulo.substring(0, 50).toLowerCase().trim();
+        antes    = getattr(self, '_blocks_before', [])
+        despues  = await self._snapshot_article_blocks()
+        estrategia, dato = self.decidir_articulo_a_marcar(antes, despues, titulo)
 
-            for (const bloque of document.querySelectorAll('div.articulo')) {
-                const titDiv = bloque.querySelector('.titulo-articulo');
-                if (!titDiv) continue;
-                const txt = (titDiv.innerText || titDiv.textContent || '').toLowerCase();
-                if (needle && txt.includes(needle)) {
-                    for (const a of bloque.querySelectorAll('a')) {
-                        if ((a.innerText || a.textContent || '').trim() === 'Marcar') {
-                            a.click();
-                            return 'por-titulo';
-                        }
-                    }
-                }
-            }
-            return null;
-        }""", titulo)
+        if estrategia == 'clave':
+            print(f"   ✅ Identificado sin ambigüedad por clave del bloque")
+            marcar_clicked = await self._click_marcar_por_clave(dato)
 
-        if not marcar_clicked:
-            print("   ⚠️  No se encontró 'Marcar' por título — revisá el artículo manualmente")
+        elif estrategia == 'titulo':
+            print("   ℹ️  Sin claves estables, pero el título no existía antes")
+            marcar_clicked = await self._click_marcar_por_titulo(titulo)
+
+        else:
+            print("\n   🛑 ABORTADO: no se puede identificar el artículo nuevo.")
+            print(f"      Motivo: {dato}")
+            print("      Abrir el editor acá podría sobrescribir un artículo ya")
+            print("      publicado, así que no se toca nada. El artículo quedó")
+            print("      creado: abrí 'Marcar' a mano sobre el correcto.")
+            self._step('marcar', False, f'ambiguo ({dato}) — no se abrió el editor')
             return True
 
-        print(f"   ✅ Click en 'Marcar' ({marcar_clicked})")
+        if not marcar_clicked:
+            print("   ⚠️  No se encontró el botón 'Marcar' — revisá el artículo manualmente")
+            self._step('marcar', False, "no se encontró el botón 'Marcar'")
+            return True
+
+        self._step('marcar', True)
+        print(f"   ✅ Click en 'Marcar'")
         await asyncio.sleep(2)
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(1)
@@ -543,6 +750,8 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         print("─"*55)
         marker = AmelicaMarker(self.page, headless=self.headless)
         marked = await marker.run()
+        self._step('marker', bool(marked),
+                   '' if marked else 'el editor de marcaje no respondió')
         if marked:
             print("\n🎉 ¡Artículo marcado exitosamente!")
         else:
@@ -551,10 +760,13 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # ── NUEVO: Completar "Datos del artículo" (titulos/autores/etc) ──
         try:
             full_data = extract_full_article_data_from_html(zip_path)
-            await self.fill_front_matter(full_data)
+            ok_fm = await self.fill_front_matter(full_data)
+            self._step('front_matter', bool(ok_fm),
+                       '' if ok_fm else 'quedó incompleto')
         except Exception as e:
             print(f"\n⚠️  No se pudo completar 'Datos del artículo' automáticamente: {e}")
             print("   Completalo manualmente en el navegador.")
+            self._step('front_matter', False, f'{type(e).__name__}: {e}')
 
         # ── Referencias: solo si se pidio explicitamente ──────────────────
         #
@@ -568,13 +780,19 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             if not refs:
                 print("\n   ℹ️  No se encontraron referencias en el HTML")
             elif self.fill_refs:
-                await self.fill_references(refs)
+                ok_refs = await self.fill_references(refs)
+                self._step('references', bool(ok_refs))
             else:
                 print(f"\n   📚 {len(refs)} referencias detectadas en el HTML.")
                 print("      Cargalas a mano, o probá --referencias (experimental).")
+                # No es un fallo: es el comportamiento pedido. Se registra
+                # como pendiente para que aparezca en el resumen.
+                self._step('references', True,
+                           f'{len(refs)} detectadas, a cargar a mano (sin --referencias)')
         except Exception as e:
             print(f"\n⚠️  No se pudieron procesar las referencias: {e}")
             print("   Completá las referencias manualmente en el navegador.")
+            self._step('references', False, f'{type(e).__name__}: {e}')
 
         return True
 
@@ -623,28 +841,42 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
         try:
             await self.start()
-            if not await self.login():                    return False
-            if not await self.pick_issue_interactive(target_volume):   return False
-            if not await self.add_article(article_data):  return False
-            if not await self.upload_zip(zip_path):       return False
+
+            # Las 4 etapas criticas cortan el flujo si fallan. Las de despues
+            # (marcaje, front matter, referencias) no cortan -- el articulo ya
+            # esta creado y conviene avanzar lo que se pueda -- pero cada una
+            # deja su resultado en self.steps y sale en el resumen final.
+            if not self._step('login', await self.login()):
+                return False
+            if not self._step('issue', await self.pick_issue_interactive(target_volume)):
+                return False
+            if not self._step('article', await self.add_article(article_data)):
+                return False
+            self.steps.setdefault('zip', (True, ''))   # upload_zip lo pisa si falla
+            if not await self.upload_zip(zip_path):
+                self._step('zip', False, 'no se pudo subir el ZIP')
+                return False
+
+            self.print_summary()
 
             if not self.headless:
-                print("\n" + "═"*55)
-                print("🎉 ¡Marcaje completado!")
-                print("   El navegador sigue abierto para que revises el")
-                print("   resultado. Cuando termines, presioná Enter aquí")
+                print("\n   El navegador sigue abierto para que revises el")
+                print("   resultado. Cuando termines, presioná Enter acá")
                 print("   para cerrar.")
-                print("═"*55)
-                input()
-            else:
-                print("\n" + "═"*55)
-                print("🎉 ¡Proceso completado!")
-                print("═"*55)
-            return True
+                try:
+                    input()
+                except EOFError:
+                    # Corriendo sin terminal interactiva (CI, pipe): no es un
+                    # fallo del proceso, solo no hay quien apriete Enter.
+                    print("   (sin terminal interactiva — cerrando)")
+
+            return self.succeeded
 
         except Exception as e:
             print(f"\n💥 Error: {e}")
             if self.page: await self._ss("error_fatal")
+            if self.steps:
+                self.print_summary()
             raise
         finally:
             if not keep_zip:
