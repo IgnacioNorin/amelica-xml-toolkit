@@ -73,6 +73,23 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         self.steps[name] = (ok, detail)
         return ok
 
+    def _confirmar_zip_por_marcaje(self, marcaje_ok: bool) -> None:
+        """Resuelve el estado del ZIP cuando el servidor no lo confirmó.
+
+        El marcaje solo puede leer las secciones del artículo si el servidor
+        proceso el HTML, asi que un marcaje exitoso es prueba de que el ZIP
+        entro. Si el marcaje tampoco funciono, quedamos sin evidencia y el
+        ZIP pasa a fallo: es el escenario donde de verdad conviene mirar.
+        """
+        if not getattr(self, '_zip_sin_confirmar', False):
+            return
+        if marcaje_ok:
+            self._step('zip', True, 'confirmado indirectamente: el editor cargó el artículo')
+        else:
+            self._step('zip', False,
+                       'sin confirmación del servidor y el editor no cargó el artículo')
+        self._zip_sin_confirmar = False
+
     @property
     def succeeded(self) -> bool:
         """True solo si todas las etapas registradas salieron bien."""
@@ -685,8 +702,15 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             if attempt % 5 == 4:
                 print(f"   ⏳ Esperando... ({attempt+1}s)")
         else:
-            print("   ⚠️  Timeout esperando confirmación del ZIP — continuando igual")
-            self._step('zip', False, 'timeout de 60s sin confirmación del servidor')
+            # span.mostrar1 no siempre aparece aunque el ZIP haya entrado
+            # bien (comprobado el 2026-08-18: timeout acá y sin embargo el
+            # editor cargó el artículo con sus 5 secciones). Se marca como
+            # incierto, no como fallo: si despues el marcaje logra abrir el
+            # articulo, eso prueba que el servidor lo proceso y se confirma
+            # retroactivamente en _confirmar_zip_por_marcaje().
+            print("   ⚠️  Sin confirmación explícita del ZIP — se verifica más adelante")
+            self._step('zip', True, 'sin confirmación explícita (se verificó por el editor)')
+            self._zip_sin_confirmar = True
 
         # Cerrar modal ZIP
         print("   🔒 Cerrando modal ZIP (click en X)...")
@@ -750,11 +774,13 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             print("      publicado, así que no se toca nada. El artículo quedó")
             print("      creado: abrí 'Marcar' a mano sobre el correcto.")
             self._step('marcar', False, f'ambiguo ({dato}) — no se abrió el editor')
+            self._confirmar_zip_por_marcaje(False)
             return True
 
         if not marcar_clicked:
             print("   ⚠️  No se encontró el botón 'Marcar' — revisá el artículo manualmente")
             self._step('marcar', False, "no se encontró el botón 'Marcar'")
+            self._confirmar_zip_por_marcaje(False)
             return True
 
         self._step('marcar', True)
@@ -771,6 +797,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         marked = await marker.run()
         self._step('marker', bool(marked),
                    '' if marked else 'el editor de marcaje no respondió')
+        self._confirmar_zip_por_marcaje(bool(marked))
         if marked:
             print("\n🎉 ¡Artículo marcado exitosamente!")
         else:

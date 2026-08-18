@@ -188,6 +188,46 @@ def test_resumen_distingue_critico_de_incompleto(capsys):
     assert "FALLÓ en una etapa crítica" not in salida
 
 
+def test_zip_sin_confirmar_se_valida_por_el_marcaje():
+    """Falso negativo real del 2026-08-18: el servidor no confirmó el ZIP,
+    pero el editor después cargó el artículo con sus 5 secciones — lo que
+    solo puede pasar si el ZIP se procesó."""
+    up = uploader()
+    up._step("zip", True, "sin confirmación explícita")
+    up._zip_sin_confirmar = True
+    up._confirmar_zip_por_marcaje(True)
+    ok, detalle = up.steps["zip"]
+    assert ok
+    assert "confirmado indirectamente" in detalle
+
+
+def test_zip_sin_confirmar_y_sin_marcaje_es_fallo():
+    """Sin confirmación del servidor Y sin editor no hay evidencia: falla."""
+    up = uploader()
+    up._step("zip", True, "sin confirmación explícita")
+    up._zip_sin_confirmar = True
+    up._confirmar_zip_por_marcaje(False)
+    assert up.steps["zip"][0] is False
+    assert not up.succeeded
+
+
+def test_zip_confirmado_no_se_toca():
+    """Si el servidor sí confirmó, el marcaje no debe cambiar nada."""
+    up = uploader()
+    up._step("zip", True)
+    up._confirmar_zip_por_marcaje(False)
+    assert up.steps["zip"] == (True, "")
+
+
+def test_confirmacion_del_zip_es_idempotente():
+    up = uploader()
+    up._step("zip", True, "sin confirmación explícita")
+    up._zip_sin_confirmar = True
+    up._confirmar_zip_por_marcaje(True)
+    up._confirmar_zip_por_marcaje(False)   # no debe revertir
+    assert up.steps["zip"][0] is True
+
+
 def test_resumen_marca_fallo_critico(capsys):
     up = uploader()
     up._step("login", True)
