@@ -104,6 +104,7 @@ async def cmd_upload(args):
     uploader = AmelicaUploader(
         email=email, password=password, headless=not args.show,
         fill_refs=args.referencias, overwrite=args.sobrescribir,
+        auto_inferir=not args.no_inferir,
     )
     ok = await uploader.run(input_path=str(input_path), article_data=data,
                             keep_zip=args.keep_zip, target_volume=volume)
@@ -139,7 +140,8 @@ async def cmd_batch(args):
 
             uploader = AmelicaUploader(email=email, password=password, headless=not args.show,
                                        fill_refs=args.referencias,
-                                       overwrite=args.sobrescribir)
+                                       overwrite=args.sobrescribir,
+                                       auto_inferir=not args.no_inferir)
             success  = await uploader.run(input_path=str(fpath), article_data=data, target_volume=saved_volume)
             (ok if success else err).append(fpath.name)
         except Exception as e:
@@ -194,6 +196,10 @@ def _portal_args(p):
     p.add_argument('--show', action='store_true', help='Mostrar el navegador')
     p.add_argument('--keep-zip', dest='keep_zip', metavar='CARPETA',
                    help='Guardar el ZIP generado en esta carpeta (para inspeccionarlo)')
+    p.add_argument('--no-inferir', dest='no_inferir', action='store_true',
+                   help='No hacer el click final en "Inferir". OJO: ese click es '
+                        'lo que guarda el marcaje -- sin el, al volver a entrar '
+                        'al articulo las secciones marcadas se perdieron.')
     p.add_argument('--sobrescribir', action='store_true',
                    help='Permitir pisar un articulo que YA tiene datos cargados. '
                         'Por defecto el paso de "Datos del articulo" aborta si '

@@ -147,6 +147,11 @@ class FrontMatterMixin:
         print("📋 Completando 'Datos del artículo'...")
         print("─"*55)
 
+        # Problemas detectados durante el llenado. Si queda alguno, el paso
+        # NO se reporta como exitoso aunque el "Guardar" final funcione:
+        # guardar datos mal puestos no es haber completado el artículo.
+        self._fm_problemas: list[str] = []
+
         # ── Guarda: ¿este artículo ya tiene datos cargados? ───────────
         #
         # En un artículo recién creado los bloques de autor existen pero
@@ -425,6 +430,7 @@ class FrontMatterMixin:
                 await asyncio.sleep(0.4 * deleted_dates)
 
         # Ahora llenar cada fecha nueva (son las únicas que quedan, en orden)
+        dp_usados = set()
         for date_idx, (date_key, type_value) in enumerate(dates_ordered):
             date_str = data['dates'][date_key]
             print(f"\n   📅 {date_key}: {date_str}")
@@ -433,31 +439,61 @@ class FrontMatterMixin:
             nth = 'first' if date_idx == 0 else 'last'
             await self._click_caja('Fecha', nth=nth)
 
-            # Elegir tipo en el select (value en inglés: 'accepted', 'pub')
-            type_set = await self.page.evaluate("""(val) => {
-                const sel = [...document.querySelectorAll('select')]
+            # Elegir tipo en el select DE ESTA caja de fecha.
+            #
+            # Antes se tomaba .at(-1) — el ultimo select del documento — sin
+            # importar cual caja se habia activado, asi que las dos fechas
+            # escribian en el mismo widget y la segunda (published) pisaba a
+            # la primera: el articulo quedaba con el año de publicacion en el
+            # campo de aceptado. Ahora se busca dentro del contenedor que
+            # corresponde al indice.
+            type_set = await self.page.evaluate("""([idx, val]) => {
+                const cajas = [...document.querySelectorAll('[title]')]
                     .filter(el => el.offsetParent !== null &&
-                                  el.className.includes('date-type-'))
-                    .at(-1);
+                                  (el.getAttribute('title') || '').startsWith('Fecha'));
+                const caja = cajas[idx];
+                if (!caja) return 'no-caja-' + idx;
+                const sel = [...caja.querySelectorAll('select')]
+                    .filter(el => el.className.includes('date-type-'))[0];
                 if (!sel) return 'no-select';
                 sel.value = val;
                 sel.dispatchEvent(new Event('change', {bubbles: true}));
                 return 'ok-' + val;
-            }""", type_value)
+            }""", [date_idx, type_value])
             print(f"      {'✅' if type_set.startswith('ok') else '⚠️ '} Tipo: {type_set}")
             await asyncio.sleep(0.3)
 
-            # Abrir el datepicker: clickear el input.date- visible más reciente
-            dp_opened = await self.page.evaluate("""() => {
-                const inp = [...document.querySelectorAll('input.date-526564616c7963')]
-                    .filter(el => el.offsetParent !== null && el.type !== 'hidden')
-                    .at(-1);
+            # Abrir el datepicker del input DE ESTA caja (mismo motivo).
+            dp_opened = await self.page.evaluate("""(idx) => {
+                const cajas = [...document.querySelectorAll('[title]')]
+                    .filter(el => el.offsetParent !== null &&
+                                  (el.getAttribute('title') || '').startsWith('Fecha'));
+                const caja = cajas[idx];
+                if (!caja) return 'no-caja-' + idx;
+                const inp = [...caja.querySelectorAll('input.date-526564616c7963')]
+                    .filter(el => el.offsetParent !== null && el.type !== 'hidden')[0];
                 if (!inp) return 'no-input';
                 inp.click();
                 return 'ok-' + inp.id;
-            }""")
+            }""", date_idx)
             print(f"      {'✅' if dp_opened.startswith('ok') else '⚠️ '} Datepicker: {dp_opened}")
             await asyncio.sleep(0.4)
+
+            # Si no se pudo apuntar a los controles de ESTA caja, la fecha
+            # que se escriba puede terminar en el campo equivocado: se
+            # registra como problema para que salga en el resumen final.
+            if not type_set.startswith('ok'):
+                self._fm_problemas.append(
+                    f"fecha '{date_key}': no se encontró el select de tipo ({type_set})")
+            if not dp_opened.startswith('ok'):
+                self._fm_problemas.append(
+                    f"fecha '{date_key}': no se encontró el input ({dp_opened})")
+            elif dp_opened in dp_usados:
+                # Las dos fechas apuntando al mismo input = una pisa a la otra.
+                self._fm_problemas.append(
+                    f"fecha '{date_key}': reusa el datepicker de otra fecha")
+            else:
+                dp_usados.add(dp_opened)
 
             await self._fill_datepicker(date_str)
 
@@ -851,5 +887,12 @@ class FrontMatterMixin:
 
         if not saved:
             print("   ⚠️  No se encontró el botón 'Guardar' — guardá manualmente")
+
+        if self._fm_problemas:
+            print("\n   ⚠️  Se completó, pero con problemas:")
+            for problema in self._fm_problemas:
+                print(f"      • {problema}")
+            print("      Revisá esos campos en el navegador.")
+            return False
 
         return saved

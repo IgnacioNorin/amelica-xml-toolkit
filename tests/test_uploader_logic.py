@@ -235,3 +235,25 @@ def test_resumen_marca_fallo_critico(capsys):
     up._step("article", False, "no se encontró 'Agregar'")
     up.print_summary()
     assert "FALLÓ en una etapa crítica" in capsys.readouterr().out
+
+
+# ── 3. El marcaje se guarda ──────────────────────────────────────
+
+def test_inferir_no_depende_del_modo_de_visualizacion():
+    """El bug: _click_inferir() estaba detrás de `if self.headless`, así que
+    corriendo con --show el marcaje nunca se guardaba y se perdía al salir.
+    Mostrar o no el navegador no puede cambiar si el trabajo se persiste."""
+    from amelica.portal.marker import AmelicaMarker
+    assert AmelicaMarker(None, headless=True).auto_inferir is True
+    assert AmelicaMarker(None, headless=False).auto_inferir is True
+
+
+def test_se_puede_desactivar_el_guardado_explicitamente():
+    from amelica.portal.marker import AmelicaMarker
+    assert AmelicaMarker(None, auto_inferir=False).auto_inferir is False
+
+
+def test_uploader_propaga_auto_inferir():
+    assert uploader().auto_inferir is True
+    up = AmelicaUploader(email="x@y.z", password="s", auto_inferir=False)
+    assert up.auto_inferir is False

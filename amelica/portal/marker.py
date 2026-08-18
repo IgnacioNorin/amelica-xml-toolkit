@@ -23,9 +23,12 @@ MARKER_VERSION = "2026-08-07-solo-h1"
 class AmelicaMarker:
     """Automatiza el marcaje de secciones en el editor de AmeliCA XML."""
 
-    def __init__(self, page, headless: bool = False):
+    def __init__(self, page, headless: bool = False, auto_inferir: bool = True):
         self.page     = page
         self.headless = headless
+        # "Inferir" es lo que persiste el marcaje. Por defecto se hace
+        # siempre: no depende de si el navegador esta visible o no.
+        self.auto_inferir = auto_inferir
         self._sections_cache = []  # Cache de secciones extraídas
 
     # ── Punto de entrada ─────────────────────────────────────────
@@ -145,12 +148,25 @@ class AmelicaMarker:
         # Paso 6: Verificar y manejar amarillos
         await self._handle_verification()
 
-        # Paso 7: Click en "Inferir" (automático solo en modo headless/batch)
-        if self.headless:
-            await self._click_inferir()
-            print("\n   ✅ Marcaje completado")
+        # Paso 7: Click en "Inferir" — es lo que persiste el marcaje.
+        #
+        # Antes esto estaba detras de `if self.headless`, asi que corriendo
+        # con --show (el modo recomendado) el marcaje NO se guardaba: al
+        # volver a entrar al articulo estaba todo perdido. El modo de
+        # visualizacion no puede cambiar si el trabajo se guarda o no.
+        if self.auto_inferir:
+            if not await self._click_inferir():
+                # Sin ese click el marcaje NO queda guardado, asi que esto
+                # es un fallo del marcaje aunque las secciones se hayan
+                # marcado bien en pantalla.
+                print("\n   ❌ Marcaje NO guardado: no se encontró 'Inferir'.")
+                print("      Las secciones se marcaron pero se pierden al salir.")
+                print("      Guardalo a mano en el navegador.")
+                return False
+            print("\n   ✅ Marcaje completado y enviado a inferir")
         else:
-            print("\n   ✅ Marcaje completado — revisá las secciones y hacé click en 'Inferir' manualmente en el navegador.")
+            print("\n   ✅ Marcaje completado — SIN guardar (--no-inferir).")
+            print("      Hacé click en 'Inferir' en el navegador o se pierde.")
 
         return True
 
@@ -851,8 +867,12 @@ class AmelicaMarker:
 
     # ── Inferir ──────────────────────────────────────────────────
 
-    async def _click_inferir(self):
-        """Click en el botón 'Inferir' para iniciar la inferencia."""
+    async def _click_inferir(self) -> bool:
+        """Click en el botón 'Inferir' — es lo que persiste el marcaje.
+
+        Devuelve True solo si realmente encontró y clickeó el botón: quien
+        llama necesita saberlo, porque sin ese click el trabajo se pierde.
+        """
         print("\n   🚀 Haciendo click en 'Inferir'...")
 
         await self._ensure_sections_panel_visible()
@@ -875,5 +895,7 @@ class AmelicaMarker:
         if clicked:
             print(f"   ✅ Click en 'Inferir' ({clicked})")
             await asyncio.sleep(3)
-        else:
-            print("   ⚠️  No se encontró el botón 'Inferir'")
+            return True
+
+        print("   ⚠️  No se encontró el botón 'Inferir'")
+        return False

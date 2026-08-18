@@ -41,7 +41,8 @@ PORTAL_URL = "https://portal.amelica.org/ameli/issue.oa"
 class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
     def __init__(self, email: str, password: str, headless: bool = False,
-                 fill_refs: bool = False, overwrite: bool = False):
+                 fill_refs: bool = False, overwrite: bool = False,
+                 auto_inferir: bool = True):
         self.email    = email
         self.password = password
         self.headless = headless
@@ -52,6 +53,9 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # por defecto el front matter aborta antes de sobrescribir trabajo
         # hecho (ver portal/front_matter.py).
         self.overwrite = overwrite
+        # Click final en "Inferir", que es lo que persiste el marcaje.
+        # Apagarlo deja el marcaje sin guardar (ver portal/marker.py).
+        self.auto_inferir = auto_inferir
         self.page                = None
         self.browser             = None
         self._last_article_title = ''
@@ -793,7 +797,8 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         print("\n" + "─"*55)
         print("🏷️  Iniciando marcaje automático de secciones...")
         print("─"*55)
-        marker = AmelicaMarker(self.page, headless=self.headless)
+        marker = AmelicaMarker(self.page, headless=self.headless,
+                               auto_inferir=self.auto_inferir)
         marked = await marker.run()
         self._step('marker', bool(marked),
                    '' if marked else 'el editor de marcaje no respondió')

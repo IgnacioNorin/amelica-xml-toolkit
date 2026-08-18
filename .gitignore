@@ -7,3 +7,6 @@ error_fatal_*.png
 # Artículos y ZIPs de trabajo
 ArticulosZip/
 index.zip
+
+# Volcados de inspección del portal (pueden traer datos del sitio)
+editor_dump.html
