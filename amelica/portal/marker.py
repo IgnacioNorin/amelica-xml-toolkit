@@ -226,7 +226,7 @@ class AmelicaMarker:
         Extrae los headings del HTML del artículo (#articuloIn).
         Debe llamarse DESPUÉS de que #articuloIn haya cargado el contenido.
         """
-        sections = await self.page.evaluate("""() => {
+        sections = await self.page.evaluate(r"""() => {
             const container = document.getElementById('articuloIn');
             if (!container) return [];
 
@@ -642,7 +642,7 @@ class AmelicaMarker:
 
         # Calcular las últimas 5 palabras del último párrafo de Conclusiones
         # SIN usar Selection API (que haría que AmeliCA capture el párrafo completo)
-        last_words = await self.page.evaluate("""() => {
+        last_words = await self.page.evaluate(r"""() => {
             const container = document.getElementById('articuloIn');
             if (!container) return '';
 

@@ -1,69 +1,57 @@
 """
-run.py  ─  Script principal de automatización AmeliCA XML
-==========================================================
+cli.py  ─  Interfaz de línea de comandos de AmeliCA XML
+========================================================
 
 Flujo recomendado:
   1. Abre el DOCX en Word → Guardar como → "Página web filtrada (*.htm, *.html)"
      Esto genera: index.html + carpeta index_archivos/
   2. Selecciona ambos (index.html + index_archivos/) y comprímelos en index.zip
-  3. Ejecuta:  python run.py upload index.zip --show
+  3. Ejecuta:  amelica upload index.zip --show
 
-El script también acepta .docx directamente, pero la calidad del HTML
-será mejor si lo exportas desde Word.
+También acepta .docx directamente, pero la calidad del HTML será mejor
+si lo exportas desde Word.
 
 Modos de uso
 ─────────────
 # Subir un ZIP (recomendado — HTML exportado desde Word):
-    python run.py upload index.zip --show
+    amelica upload index.zip --show
 
 # Subir desde DOCX (genera HTML automáticamente):
-    python run.py upload articulo.docx --show
+    amelica upload articulo.docx --show
 
 # Con credenciales directas:
-    python run.py upload index.zip --email tu@correo.com --password TuClave
+    amelica upload index.zip --email tu@correo.com --password TuClave
 
 # O guardá tus credenciales una vez en credentials.json (mismo formato que
 # credentials.example.json) para no tener que pegarlas cada vez:
     cp credentials.example.json credentials.json
     # y editá ese archivo con tu email/contraseña reales.
-    python run.py upload index.zip --show   # ya no pide email/password
+    amelica upload index.zip --show   # ya no pide email/password
 
 # Con metadatos del artículo personalizados:
-    python run.py upload index.zip --titulo "Mi título" --idioma "Inglés" --pagina-inicio 1 --pagina-fin 15
+    amelica upload index.zip --titulo "Mi título" --idioma "Inglés" --pagina-inicio 1 --pagina-fin 15
 
 # Procesar varios ZIPs de una carpeta:
-    python run.py batch ./articulos/ --email tu@correo.com
+    amelica batch ./ArticulosZip/ --email tu@correo.com
+
+Sin instalar el paquete, todo lo anterior funciona como `python -m amelica ...`.
+
+Las referencias NO se cargan en el portal por defecto: ese paso es
+experimental y borra las referencias preexistentes. Ver --referencias
+y amelica/portal/references.py.
 """
 
 import asyncio
 import argparse
 import getpass
-import json
 import sys
 from pathlib import Path
 
-from amelica_uploader import (
-    AmelicaUploader, extract_article_data, extract_article_data_from_html, fix_zip_for_amelica,
+from .parsing import (
+    extract_article_data, extract_article_data_from_html, fix_zip_for_amelica,
 )
-
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
-
-
-def load_credentials() -> tuple[str | None, str | None, str | None]:
-    """Lee email/password/volume desde credentials.json si existe, para no
-    tener que pegarlas en cada corrida. El archivo nunca se sube al repo
-    (ver .gitignore) -- queda solo en tu disco.
-    'volume' es el numero+edicion tal cual aparece en la lista de AmeliCA
-    (ej: "38 (1)") -- si coincide con un numero "En proceso", se selecciona
-    automaticamente sin preguntar."""
-    if not CREDENTIALS_FILE.exists():
-        return None, None, None
-    try:
-        data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
-        return data.get("email"), data.get("password"), data.get("volume")
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"⚠️  No se pudo leer {CREDENTIALS_FILE.name}: {e}")
-        return None, None, None
+from .config import load_credentials
+from .portal import AmelicaUploader
 
 
 # ─────────────────────────────────────────────
@@ -114,7 +102,8 @@ async def cmd_upload(args):
     print(f"{'─'*55}\n")
 
     uploader = AmelicaUploader(
-        email=email, password=password, headless=not args.show
+        email=email, password=password, headless=not args.show,
+        fill_refs=args.referencias,
     )
     await uploader.run(input_path=str(input_path), article_data=data, keep_zip=args.keep_zip, target_volume=volume)
 
@@ -144,7 +133,8 @@ async def cmd_batch(args):
             else:
                 data = extract_article_data(str(fpath))
 
-            uploader = AmelicaUploader(email=email, password=password, headless=not args.show)
+            uploader = AmelicaUploader(email=email, password=password, headless=not args.show,
+                                       fill_refs=args.referencias)
             success  = await uploader.run(input_path=str(fpath), article_data=data, target_volume=saved_volume)
             (ok if success else err).append(fpath.name)
         except Exception as e:
@@ -196,6 +186,11 @@ def _portal_args(p):
     p.add_argument('--show', action='store_true', help='Mostrar el navegador')
     p.add_argument('--keep-zip', dest='keep_zip', metavar='CARPETA',
                    help='Guardar el ZIP generado en esta carpeta (para inspeccionarlo)')
+    p.add_argument('--referencias', action='store_true',
+                   help='EXPERIMENTAL: cargar tambien las referencias en el portal. '
+                        'Apagado por defecto porque borra las referencias preexistentes '
+                        'del articulo y nunca se verifico en vivo. Sin este flag solo se '
+                        'informa cuantas referencias se detectaron.')
 
 
 def _article_args(p):
@@ -213,7 +208,7 @@ def _article_args(p):
 
 def cmd_zip(args):
     """Solo genera el ZIP sin subir — útil para inspeccionar el resultado."""
-    from amelica_uploader import build_zip_from_docx
+    from .parsing import build_zip_from_docx
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"❌ Archivo no encontrado: {input_path}"); return

@@ -19,7 +19,7 @@ import traceback
 
 from flask import Flask, request, jsonify, render_template_string
 
-from idml_a_html import build_index_zip
+from .converter import build_index_zip
 
 app = Flask(__name__)
 
