@@ -15,6 +15,58 @@ import re
 class FrontMatterMixin:
     """Llenado de "Datos del articulo". Se mezcla en AmelicaUploader."""
 
+    async def _autores_con_datos(self) -> list[dict]:
+        """Inspecciona los bloques de autor y dice cuáles tienen contenido.
+
+        Sirve para distinguir un artículo recién creado (bloques presentes
+        pero VACÍOS — AmeliCA no pre-rellena los campos de autor) de uno ya
+        cargado, donde borrar 'sobrantes' destruye datos reales.
+        """
+        return await self.page.evaluate(r"""() => {
+            const CAMPOS = ['Nombre(s)', 'Apellido(s)', 'Correo electrónico',
+                            'Afiliación completa', 'Institución'];
+            const bloques = [...document.querySelectorAll('[title="Autor"]')]
+                .filter(el => el.offsetParent !== null);
+            return bloques.map((b, i) => {
+                const valores = {};
+                for (const campo of CAMPOS) {
+                    const el = b.querySelector('[title="' + campo + '"]');
+                    const txt = el ? (el.innerText || el.textContent || '').trim() : '';
+                    if (txt) valores[campo] = txt;
+                }
+                return {indice: i, tiene_datos: Object.keys(valores).length > 0,
+                        valores: valores};
+            });
+        }""")
+
+    async def _borrar_autores_sobrantes(self, solo_vacios: bool = True) -> dict:
+        """Borra los bloques de autor sobrantes (todos menos el primero).
+
+        Con solo_vacios=True — el default — respeta los bloques que tengan
+        contenido: son datos reales, no restos de una inferencia previa.
+        Devuelve {'borrados': n, 'conservados': n}.
+        """
+        return await self.page.evaluate(r"""(soloVacios) => {
+            const CAMPOS = ['Nombre(s)', 'Apellido(s)', 'Correo electrónico',
+                            'Afiliación completa', 'Institución'];
+            const tieneDatos = (b) => CAMPOS.some(c => {
+                const el = b.querySelector('[title="' + c + '"]');
+                return el && (el.innerText || el.textContent || '').trim();
+            });
+            const authors = [...document.querySelectorAll('[title="Autor"]')]
+                .filter(el => el.offsetParent !== null);
+            let borrados = 0, conservados = 0;
+            for (let i = authors.length - 1; i >= 1; i--) {
+                const a = authors[i];
+                if (soloVacios && tieneDatos(a)) { conservados++; continue; }
+                a.dispatchEvent(new MouseEvent('mouseover',  {bubbles:true, cancelable:true, view:window}));
+                a.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true, cancelable:true, view:window}));
+                const btn = a.querySelector('[title="Cerrar"]');
+                if (btn) { btn.click(); borrados++; }
+            }
+            return {borrados: borrados, conservados: conservados};
+        }""", solo_vacios)
+
     @staticmethod
     def _split_author_name(full_name: str) -> tuple:
         """Divide el nombre completo en (Nombre(s), Apellido(s)).
@@ -95,6 +147,38 @@ class FrontMatterMixin:
         print("📋 Completando 'Datos del artículo'...")
         print("─"*55)
 
+        # ── Guarda: ¿este artículo ya tiene datos cargados? ───────────
+        #
+        # En un artículo recién creado los bloques de autor existen pero
+        # están VACÍOS (confirmado: AmeliCA no pre-rellena esos campos).
+        # Si vienen con contenido, estamos parados sobre un artículo ya
+        # trabajado — y el paso siguiente borraría autores reales, que es
+        # exactamente lo que pasó el 2026-08-18 sobre el número 38 (1).
+        try:
+            autores_existentes = await self._autores_con_datos()
+        except Exception as e:
+            print(f"   ⚠️  No se pudo inspeccionar los autores existentes: {e}")
+            autores_existentes = []
+
+        con_datos = [a for a in autores_existentes if a['tiene_datos']]
+        if con_datos and not getattr(self, 'overwrite', False):
+            print("\n   🛑 ABORTADO: el artículo YA tiene datos cargados.")
+            print(f"      Autores con contenido: {len(con_datos)} de "
+                  f"{len(autores_existentes)}")
+            for a in con_datos[:3]:
+                resumen = ' / '.join(list(a['valores'].values())[:2])
+                print(f"        • {resumen[:60]}")
+            if len(con_datos) > 3:
+                print(f"        • … y {len(con_datos) - 3} más")
+            print("      Completar acá sobrescribiría trabajo ya hecho, así que")
+            print("      no se toca nada. Si de verdad querés reescribirlo,")
+            print("      volvé a correr con --sobrescribir.")
+            return False
+
+        if con_datos:
+            print(f"\n   ⚠️  --sobrescribir activo: se van a pisar {len(con_datos)} "
+                  f"autor(es) ya cargados")
+
         if data.get('warnings'):
             for w in data['warnings']:
                 print(f"   ⚠️  {w}")
@@ -154,20 +238,17 @@ class FrontMatterMixin:
 
         emails_ptr = {num: 0 for num in data.get('affiliations', {})}
 
-        # Paso 0: borrar autores sobrantes (todos menos el primero)
-        deleted = await self.page.evaluate("""() => {
-            const authors = [...document.querySelectorAll('[title="Autor"]')]
-                .filter(el => el.offsetParent !== null);
-            let count = 0;
-            for (let i = authors.length - 1; i >= 1; i--) {
-                const a = authors[i];
-                a.dispatchEvent(new MouseEvent('mouseover',  {bubbles:true, cancelable:true, view:window}));
-                a.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true, cancelable:true, view:window}));
-                const btn = a.querySelector('[title="Cerrar"]');
-                if (btn) { btn.click(); count++; }
-            }
-            return count;
-        }""")
+        # Paso 0: borrar autores sobrantes (todos menos el primero).
+        #
+        # Solo se borran bloques VACÍOS — restos de inferencias previas. Un
+        # bloque con contenido es dato real y no se toca, salvo que se haya
+        # pedido --sobrescribir explícitamente.
+        resultado = await self._borrar_autores_sobrantes(
+            solo_vacios=not getattr(self, 'overwrite', False))
+        deleted = resultado['borrados']
+        if resultado['conservados']:
+            print(f"   🛡️  {resultado['conservados']} bloque(s) de autor con "
+                  f"datos: NO se tocaron")
         if deleted:
             print(f"\n   🗑️  Eliminados {deleted} autor(es) sobrante(s)")
             await asyncio.sleep(0.8 * deleted)   # esperar re-render por cada uno

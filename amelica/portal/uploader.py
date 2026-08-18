@@ -41,13 +41,17 @@ PORTAL_URL = "https://portal.amelica.org/ameli/issue.oa"
 class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
     def __init__(self, email: str, password: str, headless: bool = False,
-                 fill_refs: bool = False):
+                 fill_refs: bool = False, overwrite: bool = False):
         self.email    = email
         self.password = password
         self.headless = headless
         # Llenado de referencias en el portal: experimental, ver
         # portal/references.py. Apagado salvo que se pase --referencias.
         self.fill_refs = fill_refs
+        # Permitir pisar un articulo que ya tiene datos cargados. Apagado:
+        # por defecto el front matter aborta antes de sobrescribir trabajo
+        # hecho (ver portal/front_matter.py).
+        self.overwrite = overwrite
         self.page                = None
         self.browser             = None
         self._last_article_title = ''

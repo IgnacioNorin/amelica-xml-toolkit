@@ -120,11 +120,37 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 
 | Parte | Estado |
 |---|---|
+| Login y detección de números | Verificado en vivo (`tools/smoke_test.py`) |
 | Subida del ZIP y alta del artículo | Funciona, usado en producción |
 | Marcaje de secciones | Funciona |
 | Parser de referencias | Validado: 376 refs sobre 12 artículos, con tests |
 | Datos del artículo (front matter) | Funciona, pero no verificado exhaustivamente en vivo |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
+
+### Protecciones contra sobrescritura
+
+El 2026-08-18 una corrida de prueba sobre un número que ya contenía el
+artículo terminó modificando el artículo publicado en vez del recién creado,
+y le borró 3 autores. Quedaron dos guardas, ambas con tests:
+
+1. **Identificación del artículo.** Antes de crear nada se saca una foto del
+   listado; después el artículo se identifica por diferencia, no por texto
+   del título. Los ids de AmeliCA son posicionales
+   (`j_idt66:0:j_idt77:3:form-opciones` — ese `3` es la fila), así que si no
+   se puede distinguir sin ambigüedad, **aborta sin abrir el editor**.
+2. **Autores existentes.** El front matter aborta si detecta autores con
+   contenido, y el borrado de "sobrantes" solo elimina bloques vacíos. Para
+   pisar deliberadamente un artículo cargado: `--sobrescribir`.
+
+Para ver cómo identifica el portal a los artículos de un número, sin escribir
+nada:
+
+```bash
+python tools/smoke_test.py --inspeccionar
+```
+
+> Los ZIPs de `ArticulosZip/` ya están publicados. No sirven para probar el
+> flujo completo: usá un artículo que no exista en el número destino.
 
 ### Sobre las referencias
 

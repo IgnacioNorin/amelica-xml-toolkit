@@ -103,7 +103,7 @@ async def cmd_upload(args):
 
     uploader = AmelicaUploader(
         email=email, password=password, headless=not args.show,
-        fill_refs=args.referencias,
+        fill_refs=args.referencias, overwrite=args.sobrescribir,
     )
     ok = await uploader.run(input_path=str(input_path), article_data=data,
                             keep_zip=args.keep_zip, target_volume=volume)
@@ -138,7 +138,8 @@ async def cmd_batch(args):
                 data = extract_article_data(str(fpath))
 
             uploader = AmelicaUploader(email=email, password=password, headless=not args.show,
-                                       fill_refs=args.referencias)
+                                       fill_refs=args.referencias,
+                                       overwrite=args.sobrescribir)
             success  = await uploader.run(input_path=str(fpath), article_data=data, target_volume=saved_volume)
             (ok if success else err).append(fpath.name)
         except Exception as e:
@@ -193,6 +194,11 @@ def _portal_args(p):
     p.add_argument('--show', action='store_true', help='Mostrar el navegador')
     p.add_argument('--keep-zip', dest='keep_zip', metavar='CARPETA',
                    help='Guardar el ZIP generado en esta carpeta (para inspeccionarlo)')
+    p.add_argument('--sobrescribir', action='store_true',
+                   help='Permitir pisar un articulo que YA tiene datos cargados. '
+                        'Por defecto el paso de "Datos del articulo" aborta si '
+                        'detecta autores con contenido, para no destruir trabajo '
+                        'ya hecho.')
     p.add_argument('--referencias', action='store_true',
                    help='EXPERIMENTAL: cargar tambien las referencias en el portal. '
                         'Apagado por defecto porque borra las referencias preexistentes '
