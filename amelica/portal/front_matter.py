@@ -39,36 +39,82 @@ class FrontMatterMixin:
             });
         }""")
 
+    async def _crear_campo_fecha(self) -> bool:
+        """Crea un campo de fecha nuevo y CONFIRMA que apareció contando de
+        nuevo, antes de darlo por hecho.
+
+        Antes se contaba como creado si el click en 'Fecha' del menú
+        devolvía True, sin comprobar que el campo realmente apareciera en
+        el DOM. En vivo (2026-08-18) eso hizo que se pidieran 2 campos
+        nuevos y solo apareciera 1: el segundo click "tuvo éxito" según
+        Playwright pero el menú de 'Fechas' no llegó a reabrirse a tiempo.
+        Reintenta antes de rendirse.
+        """
+        antes = await self._contar_campos_fecha()
+        for _ in range(3):
+            await self._click_caja('Fechas')
+            if await self._click_menu_button('Fecha'):
+                await asyncio.sleep(0.6)
+                if await self._contar_campos_fecha() > antes:
+                    return True
+            await asyncio.sleep(0.4)
+        return False
+
     async def _contar_campos_fecha(self) -> int:
-        """Cuántos campos de fecha visibles hay, con el MISMO selector que
-        usa el llenado — contar de otra forma es engañarse."""
+        """Cuántas CAJAS de fecha hay en total (el contenedor
+        div[title^="Fecha"].date-..., no el <input> de texto de adentro).
+
+        Antes contaba `input.date-526564616c7963:not([type=hidden])`
+        visible. Con el DOM real confirmado por el usuario (2026-08-18) ese
+        input es TRANSITORIO: solo existe/es visible mientras esa caja en
+        particular está activa (recién clickeada); las demás cajas guardan
+        su valor en inputs type="hidden". Contar así no mide "cuántas cajas
+        hay", mide "hay alguna caja activa ahora mismo" — por eso el conteo
+        se iba a 0 justo después de borrar (sin nada activo) y volvía a 1
+        justo después de crear una (la recién creada queda activa), sin
+        relación real con el total. El contenedor, en cambio, es persistente
+        sin importar si está activo — es el mismo criterio que ya usaba el
+        borrado de las viejas.
+        """
         return await self.page.evaluate("""() => {
-            return [...document.querySelectorAll('input.date-526564616c7963')]
-                .filter(el => el.offsetParent !== null && el.type !== 'hidden')
+            return [...document.querySelectorAll('[title]')]
+                .filter(el => el.offsetParent !== null &&
+                              el.getAttribute('title').startsWith('Fecha') &&
+                              el.className.includes('date-526564616c7963'))
                 .length;
         }""")
 
     async def _set_date_type(self, idx: int, valor: str) -> str:
-        """Elige el tipo ('accepted'/'pub') en el select de la fecha nº idx.
+        """Elige el tipo ('accepted'/'pub') en el select de la fecha ACTIVA.
 
-        Se apunta por indice sobre la lista plana de selects, en orden del
-        DOM. Antes se usaba .at(-1) -- el ultimo del documento -- sin mirar
-        que fecha se estaba llenando, asi que las dos fechas escribian en el
-        mismo control y la segunda pisaba a la primera.
+        'idx' ya NO indexa una lista de selects simultáneamente visibles:
+        confirmado en vivo (2026-08-18, Articulo 4 y 5, corridas secuenciales
+        sin interferencia entre sesiones) que en el DOM real solo el
+        <select>/<input> de la caja recién activada por _click_caja() está
+        visible a la vez — el de la fecha anterior se oculta al activar la
+        siguiente. Indexar por posición absoluta (sels[idx]) es lo que hacía
+        que 'published' (idx=1) nunca encontrara nada: nunca había más de un
+        elemento visible, así que sels[1] no existía. Ahora se toma el único
+        visible (el que _click_caja activó justo antes de llamar a esto) —
+        'idx' queda solo para el mensaje de error si no hay ninguno.
         """
         return await self.page.evaluate("""([idx, val]) => {
             const sels = [...document.querySelectorAll(
                     'select.date-type-526564616c7963')]
                 .filter(el => el.offsetParent !== null);
-            const sel = sels[idx];
-            if (!sel) return 'no-select-' + idx + '-de-' + sels.length;
+            if (!sels.length) return 'no-select-' + idx + '-de-' + sels.length;
+            const sel = sels[sels.length - 1];
             sel.value = val;
             sel.dispatchEvent(new Event('change', {bubbles: true}));
             return 'ok-' + val;
         }""", [idx, valor])
 
     async def _open_date_picker(self, idx: int) -> str:
-        """Abre el datepicker del input de la fecha nº idx y devuelve su id.
+        """Abre el datepicker del input de la fecha ACTIVA y devuelve su id.
+
+        Mismo motivo que _set_date_type: solo el input de la caja recién
+        activada está visible, así que se toma ese en vez de indexar por
+        posición absoluta.
 
         Clase EXACTA date-526564616c7963: hay otros inputs cuyo nombre de
         clase contiene "date-" (iso-8601-date-, open-data-date-, conf-date-)
@@ -82,8 +128,8 @@ class FrontMatterMixin:
             const inps = [...document.querySelectorAll(
                     'input.date-526564616c7963')]
                 .filter(el => el.offsetParent !== null && el.type !== 'hidden');
-            const inp = inps[idx];
-            if (!inp) return 'no-input-' + idx + '-de-' + inps.length;
+            if (!inps.length) return 'no-input-' + idx + '-de-' + inps.length;
+            const inp = inps[inps.length - 1];
             inp.click();
             return 'ok-' + inp.id;
         }""", idx)
@@ -439,41 +485,56 @@ class FrontMatterMixin:
         # Mapeo data_key → value del select (confirmado con DOM)
         DATE_TYPE_VALUES = {'accepted': 'accepted', 'published': 'pub'}
 
-        # Paso 0: crear las fechas nuevas PRIMERO (quedan al final del DOM)
         dates_ordered = [
             (k, DATE_TYPE_VALUES[k])
             for k in ('accepted', 'published')
             if data.get('dates', {}).get(k)
         ]
 
+        # Paso 0a: marcar las cajas de fecha PRE-EXISTENTES antes de crear
+        # nada, para poder borrar exactamente ESAS después — no "las
+        # primeras N por posición".
+        #
+        # Eso es lo que fallaba en vivo (2026-08-18, Articulo 3): había 5
+        # fechas pre-existentes, se crearon 2 nuevas, pero el borrado
+        # posicional (fechas.slice(0, total - n_new)) asumía que las nuevas
+        # quedaban al final del DOM. No es así siempre — terminó borrando
+        # también las cajas recién creadas, y el resultado fue 0 campos en
+        # vez de 2. Marcar por identidad no depende de dónde inserte el
+        # portal la caja nueva.
+        n_viejas = await self.page.evaluate("""() => {
+            const fechas = [...document.querySelectorAll('[title]')]
+                .filter(el => el.offsetParent !== null &&
+                              el.getAttribute('title').startsWith('Fecha') &&
+                              el.className.includes('date-526564616c7963'));
+            fechas.forEach(el => el.setAttribute('data-amelica-vieja', '1'));
+            return fechas.length;
+        }""")
+
+        # Paso 0b: crear las fechas nuevas (sin la marca — se distinguen
+        # de las viejas por eso, no por posición)
         n_created = 0
         for date_key, type_value in dates_ordered:
-            await self._click_caja('Fechas')
-            if await self._click_menu_button('Fecha'):
+            if await self._crear_campo_fecha():
                 n_created += 1
-                await asyncio.sleep(0.4)
 
-        # Borrar las fechas pre-existentes (las primeras del DOM).
-        # El botón Cerrar solo aparece al hacer hover — se dispara mouseover
-        # para revelarlo antes de clickearlo, igual que con los autores.
-        if n_created > 0:
-            deleted_dates = await self.page.evaluate("""(n_new) => {
-                const fechas = [...document.querySelectorAll('[title]')]
-                    .filter(el => el.offsetParent !== null &&
-                                  el.getAttribute('title').startsWith('Fecha') &&
-                                  el.className.includes('date-526564616c7963'));
-                const to_delete = fechas.slice(0, fechas.length - n_new);
+        # Borrar las marcadas como viejas. El botón Cerrar solo aparece al
+        # hacer hover — se dispara mouseover para revelarlo, igual que con
+        # los autores.
+        if n_viejas > 0:
+            deleted_dates = await self.page.evaluate("""() => {
+                const viejas = [...document.querySelectorAll('[data-amelica-vieja="1"]')];
                 let count = 0;
-                for (let i = to_delete.length - 1; i >= 0; i--) {
-                    const f = to_delete[i];
-                    // Disparar hover para revelar el botón Cerrar
+                for (let i = viejas.length - 1; i >= 0; i--) {
+                    const f = viejas[i];
                     f.dispatchEvent(new MouseEvent('mouseover',  {bubbles:true, cancelable:true, view:window}));
                     f.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true, cancelable:true, view:window}));
                     const btn = f.querySelector('[title="Cerrar"]');
                     if (btn) { btn.click(); count++; }
+                    else { f.removeAttribute('data-amelica-vieja'); }
                 }
                 return count;
-            }""", n_created)
+            }""")
             if deleted_dates:
                 print(f"\n   🗑️  Eliminadas {deleted_dates} fecha(s) pre-existente(s)")
                 await asyncio.sleep(0.4 * deleted_dates)
@@ -491,9 +552,7 @@ class FrontMatterMixin:
             print(f"\n   ⚠️  Hay {disponibles} campo(s) de fecha para "
                   f"{len(dates_ordered)} fecha(s) — creando {faltan} más...")
             for _ in range(faltan):
-                await self._click_caja('Fechas')
-                if await self._click_menu_button('Fecha'):
-                    await asyncio.sleep(0.6)
+                await self._crear_campo_fecha()
             disponibles = await self._contar_campos_fecha()
             print(f"   ℹ️  Ahora hay {disponibles} campo(s) de fecha")
 
@@ -503,7 +562,6 @@ class FrontMatterMixin:
                 f"{len(dates_ordered)}: no se pudieron crear las que faltan")
 
         # Ahora llenar cada fecha nueva (son las únicas que quedan, en orden)
-        dp_usados = set()
         for date_idx, (date_key, type_value) in enumerate(dates_ordered):
             date_str = data['dates'][date_key]
             print(f"\n   📅 {date_key}: {date_str}")
@@ -541,12 +599,14 @@ class FrontMatterMixin:
             if not dp_opened.startswith('ok'):
                 self._fm_problemas.append(
                     f"fecha '{date_key}': no se encontró el input ({dp_opened})")
-            elif dp_opened in dp_usados:
-                # Las dos fechas apuntando al mismo input = una pisa a la otra.
-                self._fm_problemas.append(
-                    f"fecha '{date_key}': reusa el datepicker de otra fecha")
-            else:
-                dp_usados.add(dp_opened)
+            # NO se compara dp_opened entre fechas para detectar "reuso": en
+            # el DOM real (confirmado en vivo, 2026-08-18) el datepicker es
+            # un único widget compartido que se reasigna a la caja activa —
+            # su id se repite SIEMPRE entre fechas distintas aunque cada una
+            # reciba su propio valor correctamente (confirmado: accepted y
+            # published quedaron con día/mes/año distintos y correctos pese
+            # a compartir id). Comparar dp_opened acá daba un falso positivo
+            # en cada corrida.
 
             await self._fill_datepicker(date_str)
 
@@ -584,61 +644,78 @@ class FrontMatterMixin:
             print(f"\n   📝 Resumen principal {abstract_primary['lang'].upper()} "
                   f"({len(abstract_primary['text'])} chars)")
 
-            # Activar el pre-creado con click
-            activated = await self.page.evaluate("""() => {
+            # Activar el pre-creado con click.
+            #
+            # El título real es "Resumen  - ES" (con doble espacio), NO
+            # "Resumen Original - ES" — ese prefijo nunca matcheaba nada
+            # (se veía como "not-found" en el log). Con 'r' siempre null,
+            # todo lo de abajo (borrado de párrafos extra, limpieza) operaba
+            # sobre TODA la página en vez de este resumen puntual: pescaba
+            # un [title="Párrafo"] cualquiera, distinto del que se tipeaba
+            # después, y el resultado eran 2 párrafos (el original intacto +
+            # uno nuevo con el formato — negrita incluida — que traía la caja
+            # equivocada). Ahora todo el bloque queda scopeado a 'r'.
+            r_handle = await self.page.evaluate_handle("""() => {
                 const r = [...document.querySelectorAll('[title]')]
                     .filter(el => el.offsetParent !== null &&
-                                  el.getAttribute('title').startsWith('Resumen Original') &&
+                                  el.getAttribute('title').startsWith('Resumen') &&
                                   el.className.includes('abstract-'))
                     .at(0);
-                if (!r) return 'not-found';
+                if (!r) return null;
                 r.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
                 r.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true, cancelable:true, view:window}));
                 r.dispatchEvent(new MouseEvent('click',     {bubbles:true, cancelable:true, view:window}));
                 r.focus();
-                return 'ok-' + r.getAttribute('title');
+                return r;
             }""")
-            print(f"      {'✅' if activated.startswith('ok') else '⚠️ '} {activated}")
+            r_titulo = await self.page.evaluate(
+                "r => r ? r.getAttribute('title') : null", r_handle)
+            print(f"      {'✅ ok-' + r_titulo if r_titulo else '⚠️  not-found'}")
             await asyncio.sleep(0.3)
 
-            # Borrar párrafos extras (si hay más de 1) — dejar solo el primero
-            deleted_p = await self.page.evaluate("""() => {
-                const r = [...document.querySelectorAll('[title]')]
-                    .filter(el => el.offsetParent !== null &&
-                                  el.getAttribute('title').startsWith('Resumen Original') &&
-                                  el.className.includes('abstract-'))
-                    .at(0);
-                if (!r) return 0;
-                const parrafos = [...r.querySelectorAll('[title="Párrafo"]')]
-                    .filter(el => el.offsetParent !== null);
-                // Borrar de atrás hacia adelante, dejando el primero
-                let count = 0;
-                for (let i = parrafos.length - 1; i >= 1; i--) {
-                    const p = parrafos[i];
-                    p.dispatchEvent(new MouseEvent('mouseover',  {bubbles:true, cancelable:true, view:window}));
-                    p.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true, cancelable:true, view:window}));
-                    const btn = p.querySelector('[title="Cerrar"]');
-                    if (btn) { btn.click(); count++; }
-                }
-                return count;
-            }""")
-            if deleted_p:
-                print(f"      🗑️  Eliminados {deleted_p} párrafo(s) extra(s)")
-                await asyncio.sleep(0.3 * deleted_p)
+            if r_titulo:
+                # Borrar párrafos extras DENTRO de r (si hay más de 1) — dejar solo el primero
+                deleted_p = await self.page.evaluate("""(r) => {
+                    const parrafos = [...r.querySelectorAll('[title="Párrafo"]')]
+                        .filter(el => el.offsetParent !== null);
+                    let count = 0;
+                    for (let i = parrafos.length - 1; i >= 1; i--) {
+                        const p = parrafos[i];
+                        p.dispatchEvent(new MouseEvent('mouseover',  {bubbles:true, cancelable:true, view:window}));
+                        p.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true, cancelable:true, view:window}));
+                        const btn = p.querySelector('[title="Cerrar"]');
+                        if (btn) { btn.click(); count++; }
+                    }
+                    return count;
+                }""", r_handle)
+                if deleted_p:
+                    print(f"      🗑️  Eliminados {deleted_p} párrafo(s) extra(s)")
+                    await asyncio.sleep(0.3 * deleted_p)
 
-            # Tipear en el único párrafo del pre-creado (limpiar primero si tiene texto)
-            await self._click_caja('Párrafo')
-            await self.page.evaluate("""() => {
-                const spans = [...document.querySelectorAll('[title="Párrafo"] [contenteditable="true"]')]
-                    .filter(el => el.offsetParent !== null);
-                if (!spans.length) return;
-                const span = spans.at(0);
-                span.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('delete', false, null);
-            }""")
-            await asyncio.sleep(0.2)
-            await self._type_in_caja_contenido('Párrafo', abstract_primary['text'])
+                # Limpiar y tipear en el único párrafo DENTRO de r — mismo
+                # elemento para las dos operaciones, no uno para limpiar y
+                # otro (el "último de toda la página") para tipear.
+                span_ok = await self.page.evaluate("""(r) => {
+                    const span = r.querySelector('[title="Párrafo"] [contenteditable="true"]');
+                    if (!span) return false;
+                    span.focus();
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('delete', false, null);
+                    return true;
+                }""", r_handle)
+                if span_ok:
+                    await asyncio.sleep(0.2)
+                    await self.page.keyboard.type(abstract_primary['text'], delay=8)
+                    print(f"      ✅ Tipeado en el párrafo de '{r_titulo}'")
+                else:
+                    print("      ⚠️  Sin párrafo editable dentro del resumen pre-creado")
+            else:
+                # Sin el pre-creado identificado: mejor no tocar párrafos
+                # ajenos a ciegas (esa era la causa del bug). Se avisa y se
+                # deja para completar a mano.
+                self._fm_problemas.append(
+                    "resumen principal: no se encontró la caja pre-creada — "
+                    "completalo a mano")
 
             # ── Resumen secundario (si aplica) ────────────────────────
             if abstract_secondary:
@@ -919,6 +996,15 @@ class FrontMatterMixin:
             await asyncio.sleep(0.3)
 
         # ── 7. Guardar ──────────────────────────────────────────────────
+        #
+        # Mismo botón que usa AmelicaMarker (id 'save-526564616c7963:buttonS',
+        # onclick="salvarContenido()") — es un único guardado para todo el
+        # editor, no uno por pestaña. Pero acá, a diferencia de marker.py, NO
+        # se esperaba a que terminara: se clickeaba y se seguía de largo sin
+        # esperar el spinner de JSF ni el networkidle. Confirmado en vivo
+        # (2026-08-18): el click "salía bien" pero los datos no quedaban
+        # guardados — el proceso terminaba y cerraba el navegador antes de
+        # que el guardado real (AJAX) alcanzara a completarse.
         print("\n   💾 Guardando...")
         saved = False
         try:
@@ -938,7 +1024,23 @@ class FrontMatterMixin:
             except Exception:
                 pass
 
-        if not saved:
+        if saved:
+            await asyncio.sleep(1.5)
+            try:
+                await self.page.wait_for_function(
+                    """() => {
+                        const w = document.getElementById('wait-526564616c7963');
+                        return !w || w.offsetParent === null;
+                    }""", timeout=90_000)
+            except Exception:
+                print("   ⚠️  El indicador de guardado no terminó en 90s")
+            try:
+                await self.page.wait_for_load_state('networkidle', timeout=30_000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            print("   ✅ Guardado confirmado (indicador de JSF terminó)")
+        else:
             print("   ⚠️  No se encontró el botón 'Guardar' — guardá manualmente")
 
         if self._fm_problemas:

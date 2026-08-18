@@ -644,6 +644,47 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             return false;
         }""", titulo)
 
+    #: Cuánto esperar a que un modal del portal termine de cerrarse.
+    MODAL_CLOSE_TIMEOUT_MS = 30_000
+
+    async def _esperar_modal_cerrado(self, panel_id: str, nombre: str) -> bool:
+        """Espera a que un modal quede oculto, en vez de dormir a ciegas.
+
+        Antes eran sleeps fijos (4s y 6s). Si el portal tardaba más, se
+        clickeaba 'Marcar' con el modal todavía encima: el click no llegaba
+        al listado y el editor abría sin artículo — el fallo que dejaba
+        'el editor de marcaje no respondió' sin más explicación. Si el modal
+        no se cierra igual seguimos, pero queda dicho en el log.
+        """
+        try:
+            await self.page.wait_for_function(
+                """(id) => {
+                    const el = document.getElementById(id);
+                    return !el || el.offsetParent === null;
+                }""", arg=panel_id, timeout=self.MODAL_CLOSE_TIMEOUT_MS)
+        except PlaywrightTimeout:
+            print(f"   ⚠️  El modal {nombre} sigue visible tras "
+                  f"{self.MODAL_CLOSE_TIMEOUT_MS // 1000}s — probando Escape...")
+            try:
+                await self.page.keyboard.press('Escape')
+                await self.page.wait_for_function(
+                    """(id) => {
+                        const el = document.getElementById(id);
+                        return !el || el.offsetParent === null;
+                    }""", arg=panel_id, timeout=5_000)
+            except Exception:
+                print(f"   ⚠️  El modal {nombre} no se cerró — el click en "
+                      f"'Marcar' puede no llegar al listado")
+                return False
+        print(f"   ✅ Modal {nombre} cerrado")
+        # El listado se repinta por AJAX después de cerrar el modal.
+        try:
+            await self.page.wait_for_load_state('networkidle', timeout=15_000)
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+        return True
+
     # ── Subir ZIP ────────────────────────────────────────────────
 
     async def upload_zip(self, zip_path: str) -> bool:
@@ -688,12 +729,19 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 print("   ✅ Confirmación enviada")
                 break
 
-        # Esperar a que aparezcan los span.mostrar1 — señal de que el servidor
-        # procesó y aceptó el ZIP. Timeout de 60s, luego 2s extra.
+        # Señal de que el servidor procesó y aceptó el ZIP: el growl de
+        # PrimeFaces ("...ha sido aceptado") o, si ya se cerró, los
+        # span.mostrar1. El growl se ve primero pero es efímero (se
+        # autodesvanece), por eso seguimos revisando ambos cada segundo en
+        # vez de esperar solo al primero. Timeout de 60s, luego 2s extra.
         print("   ⏳ Esperando procesamiento del ZIP...")
         for attempt in range(60):
             await asyncio.sleep(1)
             mostrar = await self.page.evaluate("""() => {
+                const growl = [...document.querySelectorAll('.ui-growl-title')]
+                    .map(el => (el.innerText || '').trim())
+                    .find(t => /ha sido aceptado/i.test(t));
+                if (growl) return growl;
                 const spans = [...document.querySelectorAll('span.mostrar1')]
                     .filter(el => el.offsetParent !== null && (el.innerText||'').trim());
                 return spans.length > 0 ? spans.map(s => s.innerText.trim()).join(' | ') : null;
@@ -706,12 +754,12 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             if attempt % 5 == 4:
                 print(f"   ⏳ Esperando... ({attempt+1}s)")
         else:
-            # span.mostrar1 no siempre aparece aunque el ZIP haya entrado
-            # bien (comprobado el 2026-08-18: timeout acá y sin embargo el
-            # editor cargó el artículo con sus 5 secciones). Se marca como
-            # incierto, no como fallo: si despues el marcaje logra abrir el
-            # articulo, eso prueba que el servidor lo proceso y se confirma
-            # retroactivamente en _confirmar_zip_por_marcaje().
+            # Ni el growl ni span.mostrar1 aparecen siempre aunque el ZIP
+            # haya entrado bien (comprobado el 2026-08-18: timeout acá y sin
+            # embargo el editor cargó el artículo con sus 5 secciones). Se
+            # marca como incierto, no como fallo: si despues el marcaje
+            # logra abrir el articulo, eso prueba que el servidor lo proceso
+            # y se confirma retroactivamente en _confirmar_zip_por_marcaje().
             print("   ⚠️  Sin confirmación explícita del ZIP — se verifica más adelante")
             self._step('zip', True, 'sin confirmación explícita (se verificó por el editor)')
             self._zip_sin_confirmar = True
@@ -730,8 +778,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 if (btn) btn.click();
             }
         }""")
-        print("   ✅ Modal ZIP cerrado — esperando 4s...")
-        await asyncio.sleep(4)
+        await self._esperar_modal_cerrado('panel-html', 'ZIP')
 
         # Cerrar modal artículo
         print("   🔒 Cerrando modal artículo (click en X)...")
@@ -747,8 +794,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 if (btn) btn.click();
             }
         }""")
-        print("   ✅ Modal artículo cerrado — esperando 6s...")
-        await asyncio.sleep(6)
+        await self._esperar_modal_cerrado('panel-articulo', 'artículo')
 
         # Click en "Marcar" — sobre el artículo que ACABAMOS de crear.
         #
@@ -758,6 +804,20 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # matter lo sobrescribía (llegó a borrar autores reales).
         titulo = self._last_article_title or ''
         print(f"\n   🎯 Identificando el artículo recién creado...")
+
+        # El listado de artículos (div.articulo) NO se repinta solo tras
+        # crear uno: comprobado en vivo el 2026-08-18 — 60+ segundos después
+        # de crear el artículo, la foto seguía sin el bloque nuevo, y recién
+        # aparecía si se volvía a entrar al número desde cero. Sin este
+        # reload, "despues" salía igual a "antes" y el resultado era
+        # siempre 0 bloques nuevos: ambiguo con homónimos, o el título
+        # entero sin match sin ellos.
+        print("   🔄 Recargando la página para refrescar el listado...")
+        try:
+            await self.page.reload(wait_until='networkidle', timeout=30_000)
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"   ⚠️  No se pudo recargar el listado: {e}")
 
         antes    = getattr(self, '_blocks_before', [])
         despues  = await self._snapshot_article_blocks()
@@ -783,6 +843,11 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
         if not marcar_clicked:
             print("   ⚠️  No se encontró el botón 'Marcar' — revisá el artículo manualmente")
+            diag = await self._snapshot_article_blocks()
+            print(f"   🔍 DIAGNÓSTICO — bloques en el listado ahora ({len(diag)}):")
+            for b in diag:
+                print(f"      titulo={b['titulo'][:60]!r} clave={b['clave']!r}")
+            await self._ss("debug_no_marcar")
             self._step('marcar', False, "no se encontró el botón 'Marcar'")
             self._confirmar_zip_por_marcaje(False)
             return True
@@ -800,8 +865,12 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         marker = AmelicaMarker(self.page, headless=self.headless,
                                auto_guardar=self.auto_guardar)
         marked = await marker.run()
+        # El motivo concreto lo sabe el marker: run() puede fallar en siete
+        # puntos distintos y antes todos se reportaban igual ("el editor de
+        # marcaje no respondió"), así que el resumen no servía para nada.
         self._step('marker', bool(marked),
-                   '' if marked else 'el editor de marcaje no respondió')
+                   '' if marked else (marker.motivo_fallo
+                                      or 'el editor de marcaje no respondió'))
         self._confirmar_zip_por_marcaje(bool(marked))
         if marked:
             print("\n🎉 ¡Artículo marcado exitosamente!")

@@ -30,6 +30,15 @@ class AmelicaMarker:
         # siempre: no depende de si el navegador esta visible o no.
         self.auto_guardar = auto_guardar
         self._sections_cache = []  # Cache de secciones extraídas
+        # Motivo del último fallo de run(). Sin esto, las siete salidas
+        # distintas de run() se reportaban todas como "el editor de marcaje
+        # no respondió" y no había forma de saber cuál había fallado.
+        self.motivo_fallo = ''
+
+    def _fallar(self, motivo: str) -> bool:
+        """Registra por qué falló el marcaje y devuelve False."""
+        self.motivo_fallo = motivo
+        return False
 
     # ── Punto de entrada ─────────────────────────────────────────
 
@@ -40,6 +49,7 @@ class AmelicaMarker:
         """
         print("\n🏷️  Iniciando marcaje automático de secciones...")
         print(f"   🔖 Version del script: {MARKER_VERSION}")
+        self.motivo_fallo = ''
 
         # ── Esperar a que la navegación a marker.oa termine ──────────
         print("   ⏳ Esperando navegación a marker.oa...")
@@ -64,7 +74,8 @@ class AmelicaMarker:
             await self.page.wait_for_selector('#intArbol', timeout=15_000)
         except Exception:
             print("   ⚠️  Editor de marcaje no detectado — verificá la página")
-            return False
+            return self._fallar('el editor no cargó (#maskInfP/#intArbol '
+                                'ausentes tras 15s)')
 
         await asyncio.sleep(1)
 
@@ -75,29 +86,17 @@ class AmelicaMarker:
         )
         if not first_textarea:
             print("   ⚠️  No se encontró el primer textarea")
-            return False
+            return self._fallar('el editor abrió sin textareas de sección')
 
         await first_textarea.click()
-        print("   ⏳ Esperando que cargue el artículo en #articuloIn...")
-        await asyncio.sleep(2.5)
 
-        # Verificar que #articuloIn tenga contenido
-        has_content = await self.page.evaluate("""() => {
-            const el = document.getElementById('articuloIn');
-            return el && el.innerText && el.innerText.trim().length > 50;
-        }""")
-
-        if not has_content:
-            # Esperar un poco más
-            await asyncio.sleep(3)
-            has_content = await self.page.evaluate("""() => {
-                const el = document.getElementById('articuloIn');
-                return el && el.innerText && el.innerText.trim().length > 50;
-            }""")
-
-        if not has_content:
+        # Esperar por condición, no por sleep fijo: antes eran 2,5s + 3s y
+        # con el portal lento el artículo no llegaba a tiempo y el marcaje
+        # se daba por fallido teniéndolo todo bien.
+        if not await self._esperar_articulo_cargado():
             print("   ⚠️  #articuloIn sigue vacío — el artículo no cargó")
-            return False
+            return self._fallar(f'el artículo no cargó en #articuloIn '
+                                f'tras {self.ARTICLE_LOAD_TIMEOUT_MS // 1000}s')
 
         print("   ✅ Artículo cargado en #articuloIn")
 
@@ -105,7 +104,7 @@ class AmelicaMarker:
         sections = await self._extract_article_sections()
         if not sections:
             print("   ⚠️  No se detectaron secciones en el artículo")
-            return False
+            return self._fallar('el artículo cargó pero sin headings que marcar')
 
         print(f"   📋 Secciones detectadas: {len(sections)}")
         for s in sections:
@@ -164,7 +163,8 @@ class AmelicaMarker:
             print("\n   ❌ Marcaje NO guardado.")
             print("      Las secciones se marcaron pero se pierden al salir.")
             print("      Guardalo a mano en el navegador.")
-            return False
+            return self._fallar('las secciones se marcaron pero el guardado no '
+                                'salió — hay que guardar a mano')
 
         # Comprobar que quedó realmente guardado, no solo que el click salió.
         persistio = await self._verificar_persistencia()
@@ -174,11 +174,43 @@ class AmelicaMarker:
         if persistio is False:
             print("\n   ❌ Se guardó pero al recargar las secciones NO están.")
             print("      Revisá el artículo en el navegador.")
-            return False
+            return self._fallar('se guardó pero al recargar las secciones no están')
 
-        print("\n   ⚠️  Marcaje guardado, pero no se pudo verificar la recarga.")
+        # None = no se pudo re-verificar (no es evidencia de que se haya
+        # perdido). Confirmado en vivo dos veces (2026-08-18, Articulo 2 y
+        # 3): el click en 'Guardar' + el ciclo del spinner de JSF
+        # completaron bien las dos veces, pero re-entrar al editor con un
+        # page.reload() nunca volvió a mostrar #maskInfP a tiempo — es una
+        # limitación de esta re-verificación contra el editor (que es un
+        # modal con estado de sesión, no una URL reingresable), no evidencia
+        # de que el guardado real haya fallado. Tratarlo como fallo sería
+        # peor que el bug original: haría reportar como roto un guardado
+        # que sí funcionó.
+        print("\n   ⚠️  Marcaje guardado (click + indicador de guardado OK),")
+        print("      pero no se pudo re-confirmar reabriendo el editor.")
         print("      Confirmá a mano que las secciones quedaron.")
-        return False
+        return True
+
+    #: Cuánto esperar a que el portal cargue el artículo en #articuloIn.
+    ARTICLE_LOAD_TIMEOUT_MS = 30_000
+
+    async def _esperar_articulo_cargado(self) -> bool:
+        """Espera a que #articuloIn tenga contenido real, por condición.
+
+        El servidor puede tardar: con sleeps fijos (2,5s + 3s) una corrida
+        lenta se reportaba como "el artículo no cargó" aunque estuviera todo
+        bien. Devuelve False solo si de verdad no llegó nunca.
+        """
+        print("   ⏳ Esperando que cargue el artículo en #articuloIn...")
+        try:
+            await self.page.wait_for_function(
+                """() => {
+                    const el = document.getElementById('articuloIn');
+                    return !!(el && el.innerText && el.innerText.trim().length > 50);
+                }""", timeout=self.ARTICLE_LOAD_TIMEOUT_MS)
+            return True
+        except Exception:
+            return False
 
     # ── Aceptar modal del asistente ───────────────────────────────
 
@@ -939,19 +971,23 @@ class AmelicaMarker:
         """
         try:
             await self.page.reload(wait_until='networkidle', timeout=60_000)
-            await asyncio.sleep(3)
-
-            # Aceptar el asistente si reaparece tras la recarga
-            await self.page.evaluate(r"""() => {
-                for (const a of document.querySelectorAll('a, button')) {
-                    const t = (a.innerText || a.textContent || '').trim().toLowerCase();
-                    if (t === 'aceptar' && a.offsetParent !== null) { a.click(); return; }
-                }
-            }""")
-            await asyncio.sleep(3)
 
             if 'marker' not in (self.page.url or '').lower():
                 return None
+
+            # Reusar la misma espera robusta que el arranque de run(): la
+            # verificación original dormía 3s + 3s fijos y punto, sin
+            # esperar a que el editor terminara de inicializarse. En vivo
+            # (2026-08-18) eso alcanzaba a dar falso "no se pudo verificar"
+            # aunque el guardado hubiera sido correcto — el editor tarda
+            # más que 6s en volver a levantar tras un reload real.
+            await self._accept_inference_assistant()
+            try:
+                await self.page.wait_for_selector('#maskInfP', timeout=15_000)
+                await self.page.wait_for_selector('#intArbol', timeout=15_000)
+            except Exception:
+                return None
+            await asyncio.sleep(1)
 
             secciones = await self.page.evaluate(r"""() => {
                 const t = [...document.querySelectorAll('#intArbol .txtarea')];

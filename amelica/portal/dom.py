@@ -235,25 +235,46 @@ class DomHelpersMixin:
                       f"completá la fecha {date_str} manualmente")
                 return False
 
-        # Seleccionar mes y año en los selects del datepicker
-        set_result = await self.page.evaluate("""([mi, yr]) => {
+        # Seleccionar mes y año en los selects del datepicker.
+        #
+        # OJO: van en DOS evaluate() separados, no uno. jQuery UI reconstruye
+        # los <select> de mes/año del datepicker cuando cambia el mes (parte
+        # de _updateDatepicker() al redibujar el calendario), así que si se
+        # consultan ambos selects ANTES de disparar el 'change' del mes, la
+        # referencia al select de año queda apuntando a un nodo ya
+        # desconectado del DOM cuando se dispara SU 'change' — el evento no
+        # llega a ningún listener y el año nunca se aplica. Confirmado en
+        # vivo (2026-08-18): día y mes quedaban bien, año se quedaba en el
+        # actual (2026) en vez del pedido. Re-consultar el select de año
+        # DESPUÉS del cambio de mes evita la referencia stale.
+        month_result = await self.page.evaluate("""(mi) => {
             const dp = document.getElementById('ui-datepicker-div');
             if (!dp || dp.offsetParent === null) return 'dp-hidden';
             const mSel = dp.querySelector('.ui-datepicker-month');
-            const ySel = dp.querySelector('.ui-datepicker-year');
-            if (mSel) {
-                mSel.value = String(mi);
-                mSel.dispatchEvent(new Event('change', {bubbles: true}));
-            }
-            if (ySel) {
-                ySel.value = String(yr);
-                ySel.dispatchEvent(new Event('change', {bubbles: true}));
-            }
-            return (mSel ? 'month' : 'no-month') + '/' + (ySel ? 'year' : 'no-year');
-        }""", [month_idx, year])
+            if (!mSel) return 'no-month';
+            mSel.value = String(mi);
+            mSel.dispatchEvent(new Event('change', {bubbles: true}));
+            return 'ok';
+        }""", month_idx)
 
-        if set_result == 'dp-hidden':
-            print(f"      ⚠️  Datepicker se ocultó antes de setear mes/año para {date_str}")
+        if month_result == 'dp-hidden':
+            print(f"      ⚠️  Datepicker se ocultó antes de setear el mes para {date_str}")
+            return False
+
+        await asyncio.sleep(0.3)    # dejar que jQuery UI re-renderice tras el cambio de mes
+
+        year_result = await self.page.evaluate("""(yr) => {
+            const dp = document.getElementById('ui-datepicker-div');
+            if (!dp || dp.offsetParent === null) return 'dp-hidden';
+            const ySel = dp.querySelector('.ui-datepicker-year');   // re-consultado, no reusado
+            if (!ySel) return 'no-year';
+            ySel.value = String(yr);
+            ySel.dispatchEvent(new Event('change', {bubbles: true}));
+            return 'ok';
+        }""", year)
+
+        if year_result == 'dp-hidden':
+            print(f"      ⚠️  Datepicker se ocultó antes de setear el año para {date_str}")
             return False
 
         await asyncio.sleep(0.4)    # esperar re-render del calendario
