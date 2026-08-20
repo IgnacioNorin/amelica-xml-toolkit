@@ -150,6 +150,12 @@ INDEX_HTML = """
   <div id="estado-convertir" class="estado"></div>
 
   <h2>3. Cola de subida <span style="font-weight:normal; font-size:0.8rem; color:#777;">(arrastrá las tarjetas para cambiar el orden)</span></h2>
+  <div class="campo">
+    <button type="button" id="agregar-zip">📦 Agregar ZIP ya hecho...</button>
+    <span style="font-size:0.85rem; color:#777; margin-left:8px;">
+      Para reintentar una subida sin volver a convertir el .idml
+    </span>
+  </div>
   <div class="lote-barra">
     <button id="lote-btn">▶ Subir todo en orden</button>
     <span id="lote-estado" style="font-size:0.85rem; color:#555;"></span>
@@ -241,6 +247,17 @@ INDEX_HTML = """
       }
       fileInput.value = '';
       boton.disabled = false;
+    });
+
+    // ── Agregar un ZIP ya hecho (sin reconvertir) ─────────────────────
+    document.getElementById('agregar-zip').addEventListener('click', async () => {
+      const resp = await fetch('/pick-zip', { method: 'POST' });
+      const data = await resp.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      (data.paths || []).forEach(agregarItem);
     });
 
     // ── Cola de subida: tarjetas reordenables por drag & drop ────────
@@ -418,6 +435,32 @@ def pick_folder():
     root.destroy()
 
     return jsonify({"path": folder or None})
+
+
+@app.route("/pick-zip", methods=["POST"])
+def pick_zip():
+    """Abre el explorador nativo para elegir uno o varios index.zip ya
+    generados en corridas anteriores, sin pasar por /convert -- para
+    reintentar subidas sin reconvertir el .idml de origen."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        return jsonify({
+            "paths": [],
+            "error": "tkinter no está instalado. En Linux probá: sudo apt install python3-tk"
+        }), 500
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    zip_paths = filedialog.askopenfilenames(
+        title="Elegí uno o más index.zip ya generados",
+        filetypes=[("ZIP", "*.zip")],
+    )
+    root.destroy()
+
+    return jsonify({"paths": list(zip_paths)})
 
 
 @app.route("/convert", methods=["POST"])

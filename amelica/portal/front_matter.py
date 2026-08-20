@@ -285,24 +285,89 @@ class FrontMatterMixin:
             print("   ⚠️  Hay inconsistencias en autores/afiliaciones — "
                   "revisá manualmente antes de guardar.")
 
-        await self._click_tab('datos del artículo')
+        if not await self._click_tab('datos del artículo'):
+            print("\n   🛑 ABORTADO: no se pudo abrir la pestaña 'Datos del "
+                  "artículo' -- sin ella, cada campo de abajo fallaría en "
+                  "cascada, así que no tiene sentido seguir. Revisá el "
+                  "navegador: puede ser que la página haya quedado rota "
+                  "(ej. un error 403 del portal tras recargar el editor de "
+                  "marcaje).")
+            self._fm_problemas.append(
+                "no se pudo cambiar a la pestaña 'Datos del artículo' -- "
+                "completá todo a mano")
+            return False
         await asyncio.sleep(1.5)
+
+        # Sanity check: si tras cambiar de pestaña no aparece NINGUNA caja
+        # conocida, la página probablemente no es la que esperamos (ej. un
+        # error 403 del servidor dejó al navegador en una pantalla rota
+        # tras el reload de verificación del marcaje) -- mejor abortar ya
+        # que perder tiempo intentando 30+ campos que van a fallar igual.
+        tiene_alguna_caja = await self.page.evaluate("""() =>
+            [...document.querySelectorAll('[title]')].some(el =>
+                el.offsetParent !== null &&
+                ['Títulos', 'Autor', 'Fechas', 'Resúmenes'].includes(el.getAttribute('title')))
+        """)
+        if not tiene_alguna_caja:
+            print("\n   🛑 ABORTADO: la pestaña se abrió pero no muestra "
+                  "ninguna caja esperada (Títulos/Autor/Fechas/Resúmenes). "
+                  "Revisá el navegador -- probablemente hay un error del "
+                  "portal (ej. 403) y la página no es la que debería.")
+            self._fm_problemas.append(
+                "la pestaña 'Datos del artículo' no muestra contenido "
+                "reconocible -- completá todo a mano")
+            return False
 
         # ── 1. Título en otro idioma ──────────────────────────────────
         # CAMPO VACÍO — requiere tipeo. AmeliCA no puede inferir el título EN
         # desde un artículo en ES: el span.contenido- queda vacío, confirmado
         # en diagnóstico. Se usa _type_in_caja_contenido, no _click_...
         # La caja creada tiene title="Título Alternativo - EN" (confirmado).
-        title_en = next((t for t in data.get('titles', []) if t['lang'] == 'en'), None)
-        if title_en:
-            print(f"\n   📌 Título EN: {title_en['text'][:60]}")
+        # El primer titulo (data['titles'][0]) es el principal y ya lo
+        # completa AmeliCA solo al subir el ZIP -- solo hace falta crear la
+        # caja para el secundario, sea cual sea su idioma (no siempre EN:
+        # un articulo cuyo idioma principal es ingles trae el titulo
+        # secundario en español).
+        LANG_LABEL = {'en': 'Inglés', 'es': 'Español'}
+        title_secondary = data['titles'][1] if len(data.get('titles', [])) > 1 else None
+        if title_secondary:
+            lang_label = LANG_LABEL.get(title_secondary['lang'], 'Inglés')
+            print(f"\n   📌 Título {title_secondary['lang'].upper()}: "
+                  f"{title_secondary['text'][:60]}")
             if await self._click_caja('Títulos'):
                 if await self._click_menu_button('Título en otro idioma'):
-                    await self._select_option_containing_class('xml:lang', 'Inglés')
+                    lang_ok = await self._select_option_containing_class('xml:lang', lang_label)
+                    if not lang_ok:
+                        self._fm_problemas.append(
+                            f"título en otro idioma: no se pudo seleccionar '{lang_label}' "
+                            f"en el desplegable de idioma -- completalo a mano")
                     await asyncio.sleep(0.4)   # esperar que se cree la caja
-                    await self._type_in_caja_contenido(
-                        'Título Alternativo - EN', title_en['text']
+                    # El sufijo "- EN" esta confirmado en DOM real; "- ES"
+                    # (caso articulo principal en ingles) todavia no se vio
+                    # en vivo, asi que si el suffix del idioma esperado no
+                    # aparece se prueba el otro antes de rendirse.
+                    ok = await self._type_in_caja_contenido(
+                        f"Título Alternativo - {title_secondary['lang'].upper()}",
+                        title_secondary['text'],
                     )
+                    if not ok:
+                        other = 'ES' if title_secondary['lang'] == 'en' else 'EN'
+                        ok = await self._type_in_caja_contenido(
+                            f"Título Alternativo - {other}", title_secondary['text']
+                        )
+                    if not ok:
+                        self._fm_problemas.append(
+                            f"título {title_secondary['lang'].upper()}: se creó el botón "
+                            f"'Título en otro idioma' pero no se encontró la caja para "
+                            f"tipear (ni sufijo -ES ni -EN) -- completalo a mano")
+                else:
+                    self._fm_problemas.append(
+                        "título en otro idioma: no se encontró el botón "
+                        "'Título en otro idioma' en el menú -- completalo a mano")
+            else:
+                self._fm_problemas.append(
+                    "título en otro idioma: no se pudo abrir la caja 'Títulos' -- "
+                    "completalo a mano")
 
         # ── 2. Autores ────────────────────────────────────────────────
         # CONFIRMADO (grabado.txt):

@@ -123,26 +123,27 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 | Login y detección de números | Verificado en vivo (`tools/smoke_test.py`) |
 | Subida del ZIP y alta del artículo | Funciona, usado en producción |
 | Parser de referencias | Validado: 376 refs sobre 12 artículos, con tests |
-| Marcaje de secciones | Marca bien; **el guardado se arregló pero falta verificarlo en vivo** |
-| Datos del artículo (front matter) | Funciona; **el arreglo de fechas falta verificarlo en vivo** |
+| Marcaje de secciones | **Verificado en vivo**: guardado confirmado (click + spinner de JSF) en varias corridas reales |
+| Datos del artículo (front matter) | **Roto en vivo**: nunca llegó a completar un artículo de punta a punta (ver más abajo) |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
 
-### Pendiente de verificar (2026-08-18)
+### Pendiente: "Datos del artículo" nunca se completó en vivo (2026-08-19)
 
-Dos arreglos quedaron escritos y con tests, pero **sin confirmar contra el
-portal**: las dos corridas siguientes fallaron antes de llegar, con el editor
-sin cargar el artículo (`el editor de marcaje no respondió`). Antes de
-confiar en ellos, hacer una corrida limpia y mirar estos dos puntos:
-
-1. **Guardado del marcaje.** El botón es `save-526564616c7963:buttonS`
-   (`salvarContenido()`), no "Inferir" — buscar ese error era la causa de que
-   el marcaje se perdiera al reentrar. Ahora, tras guardar, se recarga el
-   editor para comprobar que las secciones siguen ahí. Verificar que el log
-   diga `Marcaje guardado y verificado tras recargar`.
-2. **Fechas.** El síntoma era el año de publicación en el campo de aceptado.
-   Causa: existía **un solo** campo de fecha y ambas escribían ahí. Ahora se
-   cuenta antes de escribir y se intentan crear las que falten. Verificar que
-   las dos fechas reporten ids `dp…` **distintos**.
+En las corridas reales vistas hasta ahora, el marcaje de secciones se guarda
+bien (confirmado: click en "Guardar" + el spinner de JSF completa su ciclo),
+pero el paso siguiente, completar "Datos del artículo" (títulos, autores,
+fechas, resúmenes), **nunca se probó de punta a punta**. En dos corridas
+sobre el mismo artículo (1393), la pestaña "Datos del artículo" no se pudo
+abrir — la causa confirmada en una de ellas: el portal devolvió un **403
+Forbidden** al reintentar entrar al editor de marcaje via `reload()`/`goto()`
+directo a `marker.oa` (el server rechaza el acceso directo a esa URL sin
+pasar por el flujo normal de click "Marcar"). Por eso se sacó del flujo por
+defecto el reload de re-verificación que existía después de guardar el
+marcaje (nunca confirmó nada en ninguna corrida real, y en este caso además
+rompía la página para el paso siguiente) — ver el comentario en
+`AmelicaMarker.run()`. Con eso sacado, falta una corrida limpia que llegue a
+completar "Datos del artículo" para saber si el resto de esa etapa (títulos
+ES/EN, autores, fechas, resúmenes/keywords) funciona.
 
 También quedó sin resolver que el alta no completa el campo *Sección*
 (`ID no encontrado en la pagina: seccion`).

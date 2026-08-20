@@ -47,6 +47,15 @@ import getpass
 import sys
 from pathlib import Path
 
+# En consolas de Windows con codepage por default (cp1252, no UTF-8 -- cmd.exe
+# clasico, a diferencia de Windows Terminal/PowerShell), los print() con
+# emoji de este modulo y de portal/uploader.py revientan con
+# UnicodeEncodeError a mitad de una subida. Mismo fix que ya tiene
+# idml/webapp.py para su subproceso.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from .parsing import (
     extract_article_data, extract_article_data_from_html, fix_zip_for_amelica,
 )

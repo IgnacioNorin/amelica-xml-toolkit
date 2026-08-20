@@ -12,6 +12,7 @@ Requiere: Pillow (pip install Pillow)
 """
 
 import re
+import html as htmlmod
 import os
 import sys
 import glob
@@ -35,14 +36,19 @@ STYLE_MAP = {
 TABLE_MARK_STYLES = {"Tabla Titulo"}      # "Tabla 1", "Figura 1", etc. -> heading marcador
 TABLE_SUBTITLE_STYLES = {"Tabla Subtitulo"}  # leyenda descriptiva de la tabla/figura
 
-# Orden de lectura: primero el bloque de metadatos de la portada (Sumario/Como
-# citar, licencia CC), luego el cuerpo del articulo. Las stories de
-# encabezado/pie de pagina repetido (nombre de revista, autores, ESPOL,
-# marcador <?ACE 18?>) se excluyen a proposito: son artefactos de paginacion
-# de InDesign/Word que no tienen sentido como texto suelto en un HTML sin
-# paginas, y el propio flujo de validacion manual de la editorial las descarta.
-STORY_ORDER = ["u19a2", "u19ec", "u188c"]
-EXCLUDED_STORIES = {"u16b5", "ucaf", "ucec", "ud05", "ud38", "uc9a", "ucce"}
+# Las stories de encabezado/pie de pagina repetido (nombre de revista,
+# autores, ESPOL, marcador <?ACE 18?>) se excluyen a proposito: son
+# artefactos de paginacion de InDesign/Word que no tienen sentido como texto
+# suelto en un HTML sin paginas, y el propio flujo de validacion manual de
+# la editorial las descarta.
+#
+# Los roles de cada story (cuerpo, caja Sumario/Como-citar, licencia CC,
+# encabezado/pie) se identifican por su CONTENIDO, no por el ID que le puso
+# InDesign (Story_u188c.xml, etc.) -- esos IDs no son estables entre
+# archivos .idml distintos. Confirmado con 1393-RTE-38-1: todas sus stories
+# tienen IDs completamente distintos a los del resto de articulos del mismo
+# numero de revista, asi que con IDs fijos el cuerpo del articulo (y por lo
+# tanto todo su procesamiento especial) se saltaba en silencio.
 
 IMAGES_REL_PREFIX = "index_archivos"
 
@@ -900,6 +906,63 @@ def _merge_cc_with_dates(body_parts, cc_license_html):
     return "\n".join(body_parts[:start]) + "\n" + merged_table + "\n" + "\n".join(body_parts[end:])
 
 
+def _promote_secondary_title(body_parts):
+    """El titulo traducido (la segunda lengua, sea ES o EN) a veces viene en
+    una tipografia mas chica en el IDML original y no llega al umbral de
+    15pt de 'looks_like_title', asi que sale como parrafo comun sin la clase
+    article-title. extract_full_article_data_from_html (que arma el front
+    matter) solo mira parrafos con esa clase, asi que el titulo secundario
+    se pierde en silencio -- confirmado con un articulo real (1386-RTE-38-1)
+    cuyo titulo principal es ingles y el traducido en español quedaba como
+    <p class="MsoNormal"><strong>...</strong></p> normal.
+
+    Se detecta por posicion: el parrafo que sigue INMEDIATAMENTE al titulo
+    principal, si esta enteramente envuelto en un solo <strong>/<b> (sin
+    links ni spans de superindice de afiliacion -- eso ya es la linea de
+    autores, no el titulo), se promueve agregandole la clase article-title."""
+    patron = re.compile(
+        r'^<p class="([^"]*)"([^>]*)>(?:<strong>|<b\b[^>]*>)(.*)(?:</strong>|</b>)</p>$',
+        re.DOTALL,
+    )
+    for i, p in enumerate(body_parts):
+        if 'article-title' not in p:
+            continue
+        if i + 1 >= len(body_parts):
+            break
+        candidate = body_parts[i + 1].strip()
+        m = patron.match(candidate)
+        if not m or 'href=' in m.group(3) or '<span' in m.group(3):
+            break
+        clase, resto_attrs = m.group(1), m.group(2)
+        body_parts[i + 1] = candidate.replace(
+            f'<p class="{clase}"{resto_attrs}>',
+            f'<p class="{clase} article-title"{resto_attrs}>',
+            1,
+        )
+        break
+    return body_parts
+
+
+_PAGINATION_MARKER_RE = re.compile(r'^<\?.*\?>$')
+
+
+def _strip_pagination_markers(body_parts):
+    """Descarta parrafos que son enteramente un marcador de paginacion de
+    InDesign, ej. "<?ACE 18?>" (el codigo de encabezado repetido de
+    pagina). Las stories de encabezado/pie dedicadas ya se excluyen aparte
+    (ver _classify_stories), pero a veces InDesign deja este marcador colado inline en
+    el flujo del cuerpo en vez de en su propia story -- confirmado con un
+    articulo real (1393-RTE-38-1), donde aparecia dos veces justo al
+    principio del cuerpo, antes de autores y antes del titulo."""
+    resultado = []
+    for p in body_parts:
+        texto = htmlmod.unescape(re.sub(r'<[^>]+>', '', p)).strip()
+        if _PAGINATION_MARKER_RE.match(texto):
+            continue
+        resultado.append(p)
+    return resultado
+
+
 def _insert_summary_box(body_parts, summary_box_html):
     """Inserta el bloque Sumario/Como citar justo antes del heading 'Resumen'
     (o 'Abstract' si no hay Resumen) dentro del cuerpo del articulo."""
@@ -945,14 +1008,57 @@ def _separate_stacked_headings(body_parts):
     return result
 
 
+def _story_text(path):
+    """Texto plano (sin tags) de una story, para clasificarla por contenido."""
+    content = open(path, encoding="utf-8").read()
+    texts = re.findall(r'<Content>(.*?)</Content>', content, re.DOTALL)
+    return htmlmod.unescape(" ".join(texts)).strip()
+
+
+def _classify_stories(available):
+    """Identifica el rol de cada story por su contenido: la caja
+    Sumario/Como-citar empieza con "Summary:"/"Sumario:", la licencia
+    menciona "Creative Commons", y el cuerpo del articulo es, por lejos,
+    la story con mas texto (cientos de parrafos vs. un puñado en el resto).
+    Todo lo que no cae en ninguno de esos tres roles es encabezado/pie de
+    pagina repetido y se excluye. Ver comentario arriba de por que no se usa
+    el ID de story de InDesign para esto."""
+    texts = {sid: _story_text(path) for sid, path in available.items()}
+
+    summary_box_id = None
+    cc_license_id = None
+    for sid, text in texts.items():
+        if re.match(r'^(summary|sumario)\s*:', text, re.IGNORECASE):
+            summary_box_id = sid
+        elif "Creative Commons" in text:
+            cc_license_id = sid
+
+    remaining = {
+        sid: text for sid, text in texts.items()
+        if sid not in (summary_box_id, cc_license_id)
+    }
+    if not remaining:
+        raise RuntimeError(
+            "No se pudo identificar el cuerpo del articulo entre las "
+            "stories del .idml"
+        )
+    body_id = max(remaining, key=lambda sid: len(remaining[sid]))
+
+    excluded_ids = {
+        sid for sid in available
+        if sid not in (body_id, summary_box_id, cc_license_id)
+    }
+    return body_id, summary_box_id, cc_license_id, excluded_ids
+
+
 def convert_idml_to_html_parts(stories_dir, images_dir):
     """Recorre todas las stories de un IDML ya descomprimido y devuelve el
     HTML del <body> ya armado (string)."""
     html_parts = []
 
     # Procesar todas las stories del IDML, en el orden de lectura definido.
-    # Cualquier story que exista en el archivo pero no este listada en STORY_ORDER
-    # se agrega igual al final, para no perder contenido.
+    # Cualquier story que exista en el archivo pero no tenga un rol especial
+    # identificado se agrega igual al final, para no perder contenido.
     available = {}
     for path in glob.glob(os.path.join(stories_dir, "Story_*.xml")):
         story_id = os.path.basename(path).replace("Story_", "").replace(".xml", "")
@@ -964,20 +1070,21 @@ def convert_idml_to_html_parts(stories_dir, images_dir):
             "¿el .idml se descomprimió correctamente?"
         )
 
-    ordered_ids = [s for s in STORY_ORDER if s in available]
+    body_id, summary_box_id, cc_license_id, excluded_ids = _classify_stories(available)
+
+    ordered_ids = [sid for sid in (summary_box_id, cc_license_id, body_id) if sid]
     ordered_ids += [
-        s for s in available
-        if s not in STORY_ORDER and s not in EXCLUDED_STORIES
+        sid for sid in available
+        if sid not in ordered_ids and sid not in excluded_ids
     ]
-    skipped = [s for s in available if s in EXCLUDED_STORIES]
-    if skipped:
-        print("Stories excluidas (encabezado/pie de pagina):", ", ".join(skipped))
+    if excluded_ids:
+        print("Stories excluidas (encabezado/pie de pagina):", ", ".join(sorted(excluded_ids)))
 
     print("Procesando stories:")
     cc_license_html = ""
     summary_box_html = ""
     for story_id in ordered_ids:
-        if story_id == "u19a2":
+        if story_id == summary_box_id:
             # Bloque "Sumario / Como citar": se guarda para insertarlo justo antes
             # del heading "Resumen" (o "Abstract" si no hay Resumen) dentro del
             # cuerpo del articulo, con el mismo recuadro gris del original.
@@ -991,7 +1098,7 @@ def convert_idml_to_html_parts(stories_dir, images_dir):
                 + box_html + "\n</div>"
             )
             print(f"  {os.path.basename(available[story_id])}: guardado para insertar antes de Resumen/Abstract")
-        elif story_id == "u19ec":
+        elif story_id == cc_license_id:
             # Licencia Creative Commons: no se inserta sola en el flujo; se guarda
             # para combinarla con las fechas (Enviado/Aceptado/Publicado) en una
             # tabla de dos columnas, como en el original.
@@ -999,10 +1106,12 @@ def convert_idml_to_html_parts(stories_dir, images_dir):
             convert_story(available[story_id], cc_parts, images_dir)
             cc_license_html = "\n".join(cc_parts)
             print(f"  {os.path.basename(available[story_id])}: guardado para combinar con fechas")
-        elif story_id == "u188c":
+        elif story_id == body_id:
             body_parts = []
             convert_story(available[story_id], body_parts, images_dir)
+            body_parts = _strip_pagination_markers(body_parts)
             body_parts = _separate_stacked_headings(body_parts)
+            body_parts = _promote_secondary_title(body_parts)
             body_parts = _insert_summary_box(body_parts, summary_box_html)
             html_parts.append(_merge_cc_with_dates(body_parts, cc_license_html))
         else:

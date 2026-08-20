@@ -35,11 +35,30 @@ class DomHelpersMixin:
         Devuelve True si la caja fue encontrada y los eventos disparados, y
         además espera hasta 2s a que la clase focus- aparezca como señal de
         que el handler procesó el click correctamente."""
+        try:
+            locator = self.page.locator(f'[title="{title_attr}"]:visible')
+            target = locator.last if nth == 'last' else locator.first
+            # Hover real via CDP (no sintetico): algunos menus de AmeliCA
+            # (ej. "direct-menu-..." con "Titulo en otro idioma") se revelan
+            # con :hover de CSS puro, que un MouseEvent despachado desde JS
+            # no dispara. dispatchEvent de mouseover/mouseenter mas abajo
+            # queda como refuerzo por si en cambio es un listener de JS.
+            await target.hover(timeout=timeout_ms)
+        except Exception:
+            pass
+
         result = await self.page.evaluate("""([title, nth]) => {
             const all = [...document.querySelectorAll(`[title="${title}"]`)]
                 .filter(el => el.offsetParent !== null);
             if (!all.length) return 'not-found';
             const el = nth === 'first' ? all[0] : all[all.length - 1];
+            // Algunos menus (ej. "direct-menu-..." con el boton "Titulo en
+            // otro idioma") solo se revelan con mouseover/mouseenter -- un
+            // click real de usuario siempre dispara esos eventos antes del
+            // mousedown, asi que agregarlos replica mejor la interaccion
+            // real y no deberia romper cajas que no los necesitan.
+            el.dispatchEvent(new MouseEvent('mouseover',  {bubbles: true, cancelable: true, view: window}));
+            el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true, cancelable: true, view: window}));
             el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
             el.dispatchEvent(new MouseEvent('mouseup',   {bubbles: true, cancelable: true, view: window}));
             el.dispatchEvent(new MouseEvent('click',     {bubbles: true, cancelable: true, view: window}));

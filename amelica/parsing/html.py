@@ -12,6 +12,26 @@ import html as htmlmod
 from pathlib import Path
 
 
+def _primary_language(html: str) -> str:
+    """Determina cual es el idioma PRINCIPAL del articulo mirando cual
+    heading aparece primero en el documento, "Resumen" o "Abstract" --  no
+    alcanza con mirar si "Resumen" existe: un articulo puede tener Resumen
+    Y Abstract (traduccion) y aun asi su idioma principal ser ingles, con
+    "Abstract" apareciendo antes que "Resumen" en el texto (confirmado con
+    un articulo real, 1386-RTE-38-1, cuyo titulo/cuerpo principal es
+    ingles pero igual trae un Resumen en español mas abajo).
+    """
+    resumen_m = re.search(r'<h1>\s*Resumen\s*</h1>', html)
+    abstract_m = re.search(r'<h1>\s*Abstract\s*</h1>', html)
+    if not resumen_m and not abstract_m:
+        return 'es'
+    if not resumen_m:
+        return 'en'
+    if not abstract_m:
+        return 'es'
+    return 'es' if resumen_m.start() < abstract_m.start() else 'en'
+
+
 def extract_article_data_from_html(zip_path: str) -> dict:
     """
     Extrae del index.html (generado por convertir_html.py) los datos reales
@@ -50,16 +70,16 @@ def extract_article_data_from_html(zip_path: str) -> dict:
         title = re.sub(r'<[^>]+>', '', raw).strip()
         title = re.sub(r'\s+', ' ', title)
 
-    # Idioma: si hay un heading "Resumen" el articulo tiene resumen en
-    # español (aunque tambien tenga Abstract en ingles); si solo hay
-    # "Abstract" sin "Resumen", esta escrito directamente en ingles.
-    has_resumen = bool(re.search(r'<h1>\s*Resumen\s*</h1>', html))
-    language = 'Español' if has_resumen else 'Inglés'
+    # Idioma principal: el de "Resumen" o "Abstract", el que aparezca
+    # primero en el documento (ver _primary_language -- tener ambos
+    # headings no implica que el principal sea español).
+    language = 'Español' if _primary_language(html) == 'es' else 'Inglés'
 
-    # Paginas: se sacan del parrafo "Como citar", patron "volumen(numero), inicio-fin."
+    # Paginas: se sacan del parrafo "Como citar" ("How to cite" si el
+    # articulo es en ingles), patron "volumen(numero), inicio-fin."
     # p.ej. "387(1), 25-46."
     page_start, page_end = '', ''
-    cite_match = re.search(r'Como citar.*?</p>', html, re.DOTALL)
+    cite_match = re.search(r'(?:Como citar|How to cite).*?</p>', html, re.DOTALL | re.IGNORECASE)
     if cite_match:
         cite_text = re.sub(r'<[^>]+>', '', cite_match.group(0))
         pages_match = re.search(r'\(\d+\)\s*,\s*(\d+)\s*[-–—]\s*(\d+)', cite_text)
@@ -106,9 +126,17 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
         'abstracts': [], 'doi': None, 'warnings': [],
     }
 
+    # El orden de los <p class="article-title"> en el documento sigue el
+    # idioma en que está escrito el articulo, no siempre es-primero: un
+    # articulo cuyo idioma principal es ingles trae el titulo EN primero y
+    # el ES (si existe) segundo.
+    primary_lang = _primary_language(html)
+    secondary_lang = 'en' if primary_lang == 'es' else 'es'
+
     title_matches = re.findall(r'<p class="[^"]*article-title[^"]*"[^>]*>(.*?)</p>', html, re.DOTALL)
     for i, raw in enumerate(title_matches):
-        data['titles'].append({'lang': 'es' if i == 0 else 'en', 'text': _clean(raw)})
+        lang = primary_lang if i == 0 else secondary_lang
+        data['titles'].append({'lang': lang, 'text': _clean(raw)})
 
     orcid_pos = html.find('orcid.org')
     p_start = p_end = -1
@@ -138,7 +166,14 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
             country = _clean(m.group(3)).rstrip('.').strip()
             seg_start = m.end()
             seg_end = affil_starts[i + 1].start() if i + 1 < len(affil_starts) else len(affil_block)
-            emails = re.findall(r'mailto:([^"]+)"', affil_block[seg_start:seg_end])
+            # No todos los emails del documento fuente vienen como link
+            # mailto: -- confirmado con un articulo real (1386-RTE-38-1)
+            # donde el primer autor tenia el email en texto plano y el
+            # segundo si como <a href="mailto:...">, y el de texto plano se
+            # perdia. Se busca el patron de email directamente sobre el
+            # texto limpio del segmento, que matchea ambos casos por igual.
+            seg_text = _clean(affil_block[seg_start:seg_end])
+            emails = list(dict.fromkeys(re.findall(r'[\w.+-]+@[\w-]+\.[\w.-]+', seg_text)))
             if num in data['affiliations'] and data['affiliations'][num]['text'] != name:
                 data['warnings'].append(
                     f"Dos afiliaciones distintas comparten el numero '{num}': "
@@ -148,15 +183,33 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
                 num = f"{num}b"
             data['affiliations'][num] = {'text': name, 'country': country, 'emails': emails}
 
-    for key, pat in {'accepted': r'Aceptado:\s*([\d/]+)', 'published': r'Publicado:\s*([\d/]+)'}.items():
-        m = re.search(pat, html)
-        if m:
-            data['dates'][key] = m.group(1).replace('/', '-')
+    # Igual que el titulo: la etiqueta sigue el idioma del documento fuente,
+    # no siempre es español ("Aceptado"/"Publicado") -- un articulo en
+    # ingles trae "Accepted"/"Published". Se prueban ambas variantes por
+    # clave y se usa la primera que matchee.
+    date_patterns = {
+        'accepted':  [r'Aceptado:\s*([\d/]+)',  r'Accepted:\s*([\d/]+)'],
+        'published': [r'Publicado:\s*([\d/]+)', r'Published:\s*([\d/]+)'],
+    }
+    for key, patterns in date_patterns.items():
+        for pat in patterns:
+            m = re.search(pat, html, re.IGNORECASE)
+            if m:
+                data['dates'][key] = m.group(1).replace('/', '-')
+                break
 
+    # Orden por posicion real en el documento, no fijo Resumen-primero: el
+    # primer abstract de la lista es el que AmeliCA pre-crea como "principal"
+    # al elegir el idioma del articulo, y ese tiene que coincidir con lo que
+    # realmente viene primero en el texto fuente (ver _primary_language).
+    heading_matches = []
     for heading, lang in (('Resumen', 'es'), ('Abstract', 'en')):
         h_match = re.search(rf'<h1>{heading}</h1>\s*<p class="MsoNormal">(.*?)</p>', html, re.DOTALL)
-        if not h_match:
-            continue
+        if h_match:
+            heading_matches.append((h_match.start(), lang, h_match))
+    heading_matches.sort(key=lambda x: x[0])
+
+    for _, lang, h_match in heading_matches:
         full_text = _clean(h_match.group(1))
         kw_split = re.search(r'(Palabras clave|Keywords):\s*(.*)$', full_text)
         if kw_split:

@@ -17,7 +17,7 @@ from typing import Optional
 # Marcador de version: si al correr esto NO ves esta linea en la consola con
 # este numero, estas corriendo una version vieja en cache -- borra la carpeta
 # __pycache__/ de este proyecto y volve a intentar.
-MARKER_VERSION = "2026-08-07-solo-h1"
+MARKER_VERSION = "2026-08-19-sin-reload-de-verificacion"
 
 
 class AmelicaMarker:
@@ -166,29 +166,21 @@ class AmelicaMarker:
             return self._fallar('las secciones se marcaron pero el guardado no '
                                 'salió — hay que guardar a mano')
 
-        # Comprobar que quedó realmente guardado, no solo que el click salió.
-        persistio = await self._verificar_persistencia()
-        if persistio is True:
-            print("\n   ✅ Marcaje guardado y verificado tras recargar")
-            return True
-        if persistio is False:
-            print("\n   ❌ Se guardó pero al recargar las secciones NO están.")
-            print("      Revisá el artículo en el navegador.")
-            return self._fallar('se guardó pero al recargar las secciones no están')
-
-        # None = no se pudo re-verificar (no es evidencia de que se haya
-        # perdido). Confirmado en vivo dos veces (2026-08-18, Articulo 2 y
-        # 3): el click en 'Guardar' + el ciclo del spinner de JSF
-        # completaron bien las dos veces, pero re-entrar al editor con un
-        # page.reload() nunca volvió a mostrar #maskInfP a tiempo — es una
-        # limitación de esta re-verificación contra el editor (que es un
-        # modal con estado de sesión, no una URL reingresable), no evidencia
-        # de que el guardado real haya fallado. Tratarlo como fallo sería
-        # peor que el bug original: haría reportar como roto un guardado
-        # que sí funcionó.
-        print("\n   ⚠️  Marcaje guardado (click + indicador de guardado OK),")
-        print("      pero no se pudo re-confirmar reabriendo el editor.")
-        print("      Confirmá a mano que las secciones quedaron.")
+        # NO se re-verifica recargando el editor. Se probó (_verificar_
+        # persistencia, todavia definida mas abajo por si hace falta
+        # depurar a mano) y en las corridas reales donde se uso nunca
+        # confirmo nada (2026-08-18, Articulo 2 y 3: page.reload() nunca
+        # volvio a mostrar #maskInfP a tiempo) y en un caso posterior
+        # (2026-08-19, Articulo 1393) el reload directo a marker.oa
+        # directamente devolvio un 403 del servidor ("Forbidden") -- y ni
+        # siquiera goto() a la misma URL como recuperacion sirvio. El costo
+        # (60s+ de espera, mas dejar la pagina rota para el paso siguiente,
+        # que es Datos del articulo y tiene muchos mas campos que perder)
+        # supera el beneficio de una verificacion que nunca funciono. El
+        # click en 'Guardar' ya espera el ciclo completo del spinner de
+        # JSF (_click_guardar), que es la confirmacion real de que el
+        # servidor proceso el guardado.
+        print("\n   ✅ Marcaje guardado (click + indicador de guardado OK)")
         return True
 
     #: Cuánto esperar a que el portal cargue el artículo en #articuloIn.
@@ -320,14 +312,23 @@ class AmelicaMarker:
                 return t.trim();
             }
 
-            // Known section keywords — headings containing these are never article titles
+            // Known section keywords — headings containing these are never article titles.
+            // Incluye variantes en ingles: un articulo cuyo idioma principal
+            // es ingles trae headings reales ("Introduction", "Results",
+            // "Acknowledgements and Declarations") que en español no
+            // matcheaban nada (confirmado con articulo real 1386-RTE-38-1).
             const knownSections = [
-                'introduccion', 'introducción', 'abstract', 'resumen',
-                'metodolog', 'método', 'metodo', 'material', 'resultado',
-                'discusion', 'discusión', 'conclusion', 'conclusión',
-                'palabras clave', 'keywords', 'reconocimiento', 'referencia',
-                'bibliograf', 'agradecimiento', 'declaraci', 'financiami',
-                'conflicto', 'apéndice', 'apendice', 'anexo'
+                'introduccion', 'introducción', 'introduction',
+                'abstract', 'resumen',
+                'metodolog', 'método', 'metodo', 'methodolog', 'method',
+                'material', 'resultado', 'result',
+                'discusion', 'discusión', 'discussion',
+                'conclusion', 'conclusión',
+                'palabras clave', 'keywords', 'reconocimiento', 'acknowledg',
+                'referencia', 'reference', 'bibliograf',
+                'agradecimiento', 'declaraci', 'declaration',
+                'financiami', 'funding', 'conflicto', 'conflict',
+                'apéndice', 'apendice', 'appendix', 'anexo', 'annex'
             ];
 
             // Track whether we've seen the first known section to stop skipping titles
@@ -357,22 +358,36 @@ class AmelicaMarker:
                     if (isTitleElement) continue;  // Saltear título del artículo
                 }
 
+                const clsForSkip = (node.className || '').toLowerCase();
+
                 if (lower.startsWith('abstract') ||
                     lower.startsWith('resumen') ||
                     lower.startsWith('palabras clave') ||
                     lower.startsWith('keywords') ||
                     lower.startsWith('reconocimiento') ||
+                    lower.startsWith('acknowledg') ||
                     lower.startsWith('referencia') ||
+                    lower.startsWith('reference') ||
                     lower.startsWith('bibliograf') ||
                     lower.startsWith('agradecimiento') ||
                     lower.startsWith('declaraci') ||
+                    lower.startsWith('declaration') ||
                     lower.startsWith('financiami') ||
+                    lower.startsWith('funding') ||
                     lower.startsWith('conflicto') ||
+                    lower.startsWith('conflict') ||
                     lower.startsWith('apéndice') ||
                     lower.startsWith('apendice') ||
+                    lower.startsWith('appendix') ||
                     lower.startsWith('anexo') ||
-                    /^figura\s+\d/.test(lower) ||
-                    /^tabla\s+\d/.test(lower)) {
+                    lower.startsWith('annex') ||
+                    // Pies de tabla/figura: "Tabla 1"/"Table 1"/"Figura2"/"Figure2"
+                    // (a veces sin espacio -- confirmado en articulo real).
+                    // El conversor idml los marca ademas con esta clase, que
+                    // sirve de señal independiente del idioma del texto.
+                    clsForSkip.includes('table-figure-marker') ||
+                    /^(figura|figure)\s*\d/.test(lower) ||
+                    /^(tabla|table)\s*\d/.test(lower)) {
                     continue;
                 }
 
@@ -965,15 +980,40 @@ class AmelicaMarker:
     async def _verificar_persistencia(self) -> bool | None:
         """Recarga el editor y comprueba que las secciones sigan ahí.
 
+        NO se llama desde run() -- ver el comentario ahí. En las corridas
+        reales donde se probó nunca confirmó nada y en un caso terminó en
+        un 403 del servidor que rompía la página para el paso siguiente.
+        Se deja definida por si hace falta invocarla a mano para depurar.
+
         Devuelve True/False si pudo comprobarlo, o None si no pudo (por
         ejemplo si la recarga no vuelve al editor). None NO es éxito: se
         informa como "no verificado" en vez de dar el guardado por bueno.
         """
         try:
+            url_antes = self.page.url
             await self.page.reload(wait_until='networkidle', timeout=60_000)
 
             if 'marker' not in (self.page.url or '').lower():
                 return None
+
+            # Un reload() crudo sobre una pagina JSF con estado de sesion
+            # (el editor es un modal, no una URL reingresable -- ver nota
+            # abajo) puede volver con un error del servidor (403/expirado)
+            # en vez del editor, aunque la URL siga diciendo "marker". Sin
+            # este chequeo, el codigo seguia de largo asumiendo que solo
+            # tardaba en cargar, y el paso siguiente (Datos del articulo)
+            # fallaba en cascada sobre una pagina rota sin ninguna pista de
+            # por que -- confirmado en vivo con un articulo real (1393).
+            cuerpo = (await self.page.evaluate("() => document.body ? document.body.innerText : ''") or "")
+            if re.search(r'\b403\b|forbidden|prohibido|acceso denegado', cuerpo, re.IGNORECASE):
+                print(f"   ⚠️  El reload de verificación devolvió una página de error "
+                      f"(texto sospechoso: {cuerpo.strip()[:80]!r}) en vez del editor.")
+                print(f"      URL antes del reload: {url_antes}")
+                print("      Reintentando con una navegación nueva en vez de reload()...")
+                try:
+                    await self.page.goto(url_antes, wait_until='networkidle', timeout=30_000)
+                except Exception:
+                    pass
 
             # Reusar la misma espera robusta que el arranque de run(): la
             # verificación original dormía 3s + 3s fijos y punto, sin
