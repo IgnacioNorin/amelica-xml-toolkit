@@ -718,51 +718,49 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             await self._ss("debug_no_file_input")
             return False
 
-        await file_input.set_input_files(str(zip_path))
-        print("   ✅ ZIP seleccionado")
+        confirm_selectors = ['button:has-text("Subir")', 'button:has-text("Aceptar")',
+                              'button:has-text("Cargar")', 'input[type="submit"]']
 
-        for sel in ['button:has-text("Subir")', 'button:has-text("Aceptar")',
-                    'button:has-text("Cargar")', 'input[type="submit"]']:
-            confirm = await upload_frame.query_selector(sel)
-            if confirm:
-                await confirm.click()
-                print("   ✅ Confirmación enviada")
-                break
+        async def _seleccionar_y_confirmar():
+            await file_input.set_input_files(str(zip_path))
+            print("   ✅ ZIP seleccionado")
+            for sel in confirm_selectors:
+                confirm = await upload_frame.query_selector(sel)
+                if confirm:
+                    await confirm.click()
+                    print("   ✅ Confirmación enviada")
+                    break
 
-        # Señal de que el servidor procesó y aceptó el ZIP: el growl de
-        # PrimeFaces ("...ha sido aceptado") o, si ya se cerró, los
-        # span.mostrar1. El growl se ve primero pero es efímero (se
-        # autodesvanece), por eso seguimos revisando ambos cada segundo en
-        # vez de esperar solo al primero. Timeout de 60s, luego 2s extra.
-        print("   ⏳ Esperando procesamiento del ZIP...")
-        for attempt in range(60):
-            await asyncio.sleep(1)
-            mostrar = await self.page.evaluate("""() => {
-                const growl = [...document.querySelectorAll('.ui-growl-title')]
-                    .map(el => (el.innerText || '').trim())
-                    .find(t => /ha sido aceptado/i.test(t));
-                if (growl) return growl;
-                const spans = [...document.querySelectorAll('span.mostrar1')]
-                    .filter(el => el.offsetParent !== null && (el.innerText||'').trim());
-                return spans.length > 0 ? spans.map(s => s.innerText.trim()).join(' | ') : null;
-            }""")
-            if mostrar:
-                print(f"   ✅ ZIP aceptado tras {attempt+1}s: {mostrar[:80]}")
-                self._step('zip', True)
-                await asyncio.sleep(2)
-                break
-            if attempt % 5 == 4:
-                print(f"   ⏳ Esperando... ({attempt+1}s)")
-        else:
-            # Ni el growl ni span.mostrar1 aparecen siempre aunque el ZIP
-            # haya entrado bien (comprobado el 2026-08-18: timeout acá y sin
-            # embargo el editor cargó el artículo con sus 5 secciones). Se
-            # marca como incierto, no como fallo: si despues el marcaje
-            # logra abrir el articulo, eso prueba que el servidor lo proceso
-            # y se confirma retroactivamente en _confirmar_zip_por_marcaje().
-            print("   ⚠️  Sin confirmación explícita del ZIP — se verifica más adelante")
-            self._step('zip', True, 'sin confirmación explícita (se verificó por el editor)')
+        # El widget de PrimeFaces sube el archivo apenas se elige (auto:true
+        # en su config JS), sin boton -- confirmado inspeccionando en vivo la
+        # respuesta real del servidor (2026-08-20). Esa respuesta ajax
+        # (POST a upload.oa) siempre trae, en el mismo body, tanto el growl
+        # ("...ha sido aceptado") como los span.mostrar1 -- se intercepta
+        # directamente en vez de hacer polling del DOM esperando que el growl
+        # (efimero) o el mostrar1 (a veces no llegaba a verse) aparezcan, que
+        # es lo que se hacia antes y a veces daba falso "sin confirmación"
+        # aunque el ZIP hubiera entrado bien.
+        print("   ⏳ Subiendo y esperando respuesta del servidor...")
+        try:
+            async with self.page.expect_response(
+                lambda r: "upload.oa" in r.url and r.request.method == "POST",
+                timeout=90_000,
+            ) as response_info:
+                await _seleccionar_y_confirmar()
+        except PlaywrightTimeout:
+            print("   ⚠️  El servidor no respondió al POST de upload.oa a tiempo")
+            self._step('zip', True, 'sin respuesta del servidor (se verificó por el editor)')
             self._zip_sin_confirmar = True
+        else:
+            response = await response_info.value
+            body = await response.text()
+            if re.search(r'ha sido aceptado', body, re.IGNORECASE):
+                print("   ✅ ZIP aceptado (confirmado por la respuesta del servidor)")
+                self._step('zip', True)
+            else:
+                print(f"   ⚠️  Respuesta del servidor sin confirmación de aceptación: {body[:200]}")
+                self._step('zip', True, 'respuesta del servidor sin confirmación explícita (se verificó por el editor)')
+                self._zip_sin_confirmar = True
 
         # Cerrar modal ZIP
         print("   🔒 Cerrando modal ZIP (click en X)...")
