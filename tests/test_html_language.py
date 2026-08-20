@@ -123,6 +123,70 @@ def test_email_en_texto_plano_sin_link_mailto(tmp_path):
     assert "rodrigo@utc.edu.ec" in emails
 
 
+def test_orcid_con_espacio_colado_no_se_pierde(tmp_path):
+    """Caso real: 1393-RTE-38-1. InDesign dejo un espacio justo despues de
+    "orcid.org/" en el href (href="https://orcid.org/ 0000-..."). Sin
+    tolerar ese espacio, la regex no matcheaba NINGUN ORCID del articulo y
+    los 5 autores quedaban con orcid=None sin ningun aviso."""
+    html = """
+    <html><body>
+    <p class="MsoNormal article-title">La robotica y ChatGPT</p>
+    <p class="MsoNormal">Jorge Gudino<span>1</span>
+    <a href="https://orcid.org/ 0000-0002-0585-908X">https://orcid.org/ 0000-0002-0585-908X</a>,
+    Kevin Andrade<span>1</span>
+    <a href="https://orcid.org/ 0000-0003-4257-5788">https://orcid.org/ 0000-0003-4257-5788</a></p>
+    </body></html>
+    """
+    zip_path = _build_zip(tmp_path, html)
+    data = extract_full_article_data_from_html(zip_path)
+
+    assert data["authors"][0]["orcid"] == "https://orcid.org/0000-0002-0585-908X"
+    assert data["authors"][1]["orcid"] == "https://orcid.org/0000-0003-4257-5788"
+
+
+def test_orcid_con_barra_sobrante_no_desalinea_a_otros_autores(tmp_path):
+    """Caso real: 1336-RTE-38-1. El href del primer autor trae una barra
+    sobrante antes de la comilla de cierre
+    (href="https://orcid.org/0000-.../"). Con la extraccion anterior (lista
+    de ORCIDs aparte, emparejada por indice con la lista de autores), ese
+    href roto se descartaba Y ademas corria el resto de los ORCIDs un lugar
+    a la izquierda -- cada autor terminaba con el ORCID de otro."""
+    html = """
+    <html><body>
+    <p class="MsoNormal article-title">Cajas de ahorro comunitarias</p>
+    <p class="MsoNormal">Dunia Yaguache<span>1</span>
+    <a href="https://orcid.org/0000-0002-3058-3775/">https://orcid.org/0000-0002-3058-3775/</a>,
+    Carlos Cobos<span>1</span>
+    <a href="https://orcid.org/0000-0002-7597-9351">https://orcid.org/0000-0002-7597-9351</a>,
+    Veronica Cabrera<span>1</span>
+    <a href="https://orcid.org/0000-0002-5489-3321">https://orcid.org/0000-0002-5489-3321</a></p>
+    </body></html>
+    """
+    zip_path = _build_zip(tmp_path, html)
+    data = extract_full_article_data_from_html(zip_path)
+
+    assert data["authors"][0]["name"] == "Dunia Yaguache"
+    assert data["authors"][0]["orcid"] == "https://orcid.org/0000-0002-3058-3775"
+    assert data["authors"][1]["name"] == "Carlos Cobos"
+    assert data["authors"][1]["orcid"] == "https://orcid.org/0000-0002-7597-9351"
+    assert data["authors"][2]["name"] == "Veronica Cabrera"
+    assert data["authors"][2]["orcid"] == "https://orcid.org/0000-0002-5489-3321"
+
+
+def test_doi_con_espacio_colado_se_limpia(tmp_path):
+    html = """
+    <html><body>
+    <p class="MsoNormal article-title">Articulo con DOI raro</p>
+    <p class="MsoNormal"><a href="https://doi.org/10.37815/rte.v38n1. 1393">
+    https://doi.org/10.37815/rte.v38n1. 1393</a></p>
+    </body></html>
+    """
+    zip_path = _build_zip(tmp_path, html)
+    data = extract_full_article_data_from_html(zip_path)
+
+    assert data["doi"] == "https://doi.org/10.37815/rte.v38n1.1393"
+
+
 def test_articulo_principal_espanol_titulo_es_primero(tmp_path):
     html = """
     <html><body>

@@ -149,10 +149,23 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
 
     if author_html:
         name_num_pattern = re.compile(r'([A-ZÁÉÍÓÚÑ][^<,"=]*?)<span[^>]*>(\d+)</span>')
-        names_nums = name_num_pattern.findall(author_html)
-        orcids = re.findall(r'href="(https://orcid\.org/[\w-]+)"', author_html)
-        for i, (name, num) in enumerate(names_nums):
-            orcid = orcids[i] if i < len(orcids) else None
+        name_matches = list(name_num_pattern.finditer(author_html))
+        # El ORCID de cada autor se busca en el tramo de HTML entre su
+        # nombre y el del siguiente autor (no con una lista aparte
+        # emparejada por indice) porque los href de ORCID que deja
+        # InDesign no siempre son un href="...".../a> prolijo: a veces
+        # traen un espacio colado justo despues de "orcid.org/"
+        # (confirmado en 1393-RTE-38-1) o una barra sobrante antes de la
+        # comilla de cierre (confirmado en 1336-RTE-38-1, primer autor).
+        # Con la lista aparte, un solo href roto hacia que ese ORCID se
+        # descartara Y ademas corriera el resto uno a la izquierda,
+        # asignando el ORCID de un autor a otro sin ningun aviso.
+        for i, m in enumerate(name_matches):
+            name, num = m.group(1), m.group(2)
+            segment_end = name_matches[i + 1].start() if i + 1 < len(name_matches) else len(author_html)
+            segment = author_html[m.end():segment_end]
+            orcid_match = re.search(r'orcid\.org/\s*([\w-]+)', segment)
+            orcid = f'https://orcid.org/{orcid_match.group(1)}' if orcid_match else None
             data['authors'].append({'name': name.strip(), 'affil_num': num, 'orcid': orcid})
 
         start = p_end + len('</p>')
@@ -221,6 +234,9 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
 
     doi_match = re.search(r'href="(https://doi\.org/[^"]+)"', html)
     if doi_match:
-        data['doi'] = doi_match.group(1)
+        # A diferencia del ORCID, aca no conviene descartar el match si trae
+        # un espacio colado (mismo tipo de artefacto de InDesign) -- alcanza
+        # con sacarlo, ya que un DOI real nunca lleva espacios.
+        data['doi'] = re.sub(r'\s+', '', doi_match.group(1))
 
     return data
