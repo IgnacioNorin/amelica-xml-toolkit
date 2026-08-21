@@ -15,8 +15,14 @@ el select publication-type-). Se encontro y arreglo un mismatch real:
 Año NO es un span editable como asumia _fill_ref_year -- es un
 select[class*="iso-8601-date-"], igual mecanismo que publication-type-.
 
-Sigue sin probarse en vivo: el boton Guardar de esta pestaña (no se llego
-a clickear en la grabacion), y autores institucionales (existe un boton
+El boton Guardar (`#save-526564616c7963:buttonS`, onclick="salvarContenido();")
+tambien esta confirmado: es el mismo boton compartido del editor de
+marker.oa que ya usan con exito el guardado del marcaje y el de "Datos
+del articulo" (verificado inspeccionando el HTML real de ese form).
+
+Sigue sin probarse en vivo: solo queda el llenado completo de una
+referencia y el guardado real de punta a punta (con --referencias sobre
+un articulo de prueba), y autores institucionales (existe un boton
 "Autor institucional" con caja title="Institución" que _add_ref_authors
 no contempla). El parser que alimenta esto (parsing/references.py) si
 esta validado. Para seguir verificando: correr con --referencias sobre un
