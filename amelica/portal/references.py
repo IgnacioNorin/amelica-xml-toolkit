@@ -167,8 +167,15 @@ class ReferencesMixin:
                                    nth: str = 'last') -> bool:
         """Escribe texto en el span.contenido- de la caja con el title dado.
         nth='last' usa la más reciente (útil cuando hay varias del mismo tipo).
-        nth='first' usa la primera."""
-        result = await self.page.evaluate("""([title, nth]) => {
+        nth='first' usa la primera.
+
+        Bug real encontrado en una corrida real (2026-08-21): el array
+        pasado a evaluate() solo traia [title_attr, nth] -- 'text' nunca se
+        pasaba ni se destructuraba, pese a usarse en insertText() mas abajo,
+        y tiraba ReferenceError apenas encontraba una caja real para
+        tipear. No se detecto antes porque las grabaciones manuales previas
+        solo observaban el DOM, nunca ejecutaban este codigo."""
+        result = await self.page.evaluate("""([title, nth, text]) => {
             const all = [...document.querySelectorAll(`[title="${title}"]`)]
                 .filter(el => el.offsetParent !== null);
             if (!all.length) return 'not-found';
@@ -189,7 +196,7 @@ class ReferencesMixin:
             document.execCommand('delete',    false, null);
             document.execCommand('insertText', false, text);
             return 'ok';
-        }""", [title_attr, nth])
+        }""", [title_attr, nth, text])
 
         if result != 'ok':
             print(f"      ⚠️  _fill_ref_contenido ({result}): '{title_attr}'")
@@ -295,23 +302,37 @@ class ReferencesMixin:
         return True
 
     async def _fill_single_reference(self, ref: dict) -> bool:
-        """Llena todos los campos de una referencia individual."""
+        """Llena todos los campos de una referencia individual.
+
+        Orden confirmado grabando el flujo real (2026-08-21): el <select>
+        de tipo de publicación no existe/no es visible hasta que se activa
+        la caja "Referencia detallada" (generica, sin sufijo de tipo)
+        primero -- por eso _set_ref_pub_type NO puede ir antes de ese
+        click. El orden anterior (tipo de publicacion primero) hacia que
+        siempre fallara "no se pudo setear pub_type" en toda referencia
+        nueva."""
         pub_type = ref.get('pub_type', 'journal')
         year     = ref.get('year', '')
         authors  = ref.get('authors', [])
 
-        # 1. Seleccionar tipo de publicación
-        ok = await self._set_ref_pub_type(pub_type)
-        if not ok:
-            print(f"      ⚠️  No se pudo setear pub_type={pub_type}")
-
-        # 2. Referencia completa (texto plano)
+        # 1. Referencia completa (texto plano)
         full_text = ref.get('full_text', '')
         if full_text:
             await self._fill_ref_contenido('Referencia completa', full_text)
             await asyncio.sleep(0.2)
 
-        # 3. Activar Referencia detallada para revelar botones
+        # 2. Activar Referencia detallada (generica) para revelar el select
+        #    de tipo de publicación
+        await self._click_caja('Referencia detallada')
+        await asyncio.sleep(0.3)
+
+        # 3. Seleccionar tipo de publicación (el select ya existe)
+        ok = await self._set_ref_pub_type(pub_type)
+        if not ok:
+            print(f"      ⚠️  No se pudo setear pub_type={pub_type}")
+
+        # 3b. Reactivar la caja, ahora con su titulo especifico de tipo
+        #     (- JOURNAL, - BOOK, etc.) para revelar los botones de menu
         det_title = f'Referencia detallada - {pub_type.upper()}'
         await self._click_caja(det_title)
         await asyncio.sleep(0.3)
