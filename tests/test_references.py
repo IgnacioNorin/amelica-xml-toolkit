@@ -110,9 +110,31 @@ def test_autor_personal_no_es_institucional(texto):
 
 
 @pytest.mark.parametrize("raw,texto,esperado", [
+    # journal: 2+ <em> (fuente + volumen en cursiva)
     ("<em>Revista</em>, <em>32</em>(4)", "Autor (2020). Titulo. Revista, 32(4)", "journal"),
+    # thesis: [Tesis ... ] o [Thesis ...] -- gana aunque parezca otra cosa
     ("<em>[Tesis de grado, Universidad X]</em>", "Autor (2023). Titulo [Tesis de grado, Universidad X]", "thesis"),
+    ("", "Smith, J. (2021). Title [Thesis, MIT University].", "thesis"),
+    # confproc: palabras clave de conferencia
     ("<em>Actas del Congreso</em>", "Autor (2019). Titulo. Actas del Congreso", "confproc"),
+    ("", "López, A. (2022). Ponencia. Proceedings of the IEEE Conference.", "confproc"),
+    # report: autor institucional + palabra clave de reporte
+    ("", "Banco Central del Ecuador. (2020). Informe anual de gestión.", "report"),
+    # report: autor institucional sin cursiva (sin revista), sin palabra clave
+    ("", "Organización Mundial de la Salud. (2019). Directrices generales de salud.", "report"),
+    # webpage: "Retrieved from" / "Recuperado de"
+    ("", "Smith, J. (2021). Website title. Retrieved from https://example.com/page", "webpage"),
+    ("", "Pérez, J. (2021). Título de la página. Recuperado de https://ejemplo.com", "webpage"),
+    # webpage: fecha extendida (2020, Febrero)
+    ("", "García, M. (2020, Febrero). Título del artículo web.", "webpage"),
+    # webpage: corchetes sin "Tesis" (ej. [Entrada de blog])
+    ("", "López, A. (2021). Título del recurso [Entrada de blog].", "webpage"),
+    # webpage: sin cursiva + URL, sin ninguna otra señal
+    ("", "Autor, A. (2021). Título de la página sin corchetes. https://example.com/resource", "webpage"),
+    # book: 1 <em> (título del libro en cursiva)
+    ("<em>Título del libro</em>", "Autor, A. (2020). Título del libro. Editorial X.", "book"),
+    # book: sin cursiva, sin URL, sin corchetes, autor personal (fallback)
+    ("", "Abud, T. P. (2020). Título de libro sin cursiva. Editorial Y.", "book"),
 ])
 def test_clasificacion_de_tipo(raw, texto, esperado):
     assert _classify_reference_type(raw, texto) == esperado
