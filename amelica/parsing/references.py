@@ -84,7 +84,8 @@ def _classify_reference_type(raw_html: str, full_text: str) -> str:
     Reglas en orden de prioridad (confirmadas con ejemplos reales):
     - thesis   : tiene [Tesis o [Thesis
     - confproc : palabras clave de conferencia
-    - journal  : 2+ <em> (fuente + volumen en cursiva)
+    - journal  : 2+ <em> (fuente + volumen en cursiva), o patron
+                 "volumen(numero), paginas" aunque no haya cursivas
     - report   : autor institucional + ("Informe","Report","Guidelines","Norma","Balance")
                  o autor institucional sin revista
     - webpage  : "Retrieved from", fecha extendida, corchetes sin Tesis, URL sin editorial
@@ -110,6 +111,15 @@ def _classify_reference_type(raw_html: str, full_text: str) -> str:
 
     # JOURNAL: 2+ cursivas
     if em_count >= 2:
+        return 'journal'
+
+    # JOURNAL sin cursivas: el HTML de origen a veces no envuelve la revista
+    # en <em> (confirmado en un articulo real, "peor caso" de formato de
+    # origen), pero el patron "volumen(numero), paginas" -- ej. "22(2),
+    # 143-162" -- solo aparece en articulos de revista. Sin esto, esas
+    # referencias caian en la regla de respaldo de webpage (sin cursiva +
+    # URL) solo por traer un DOI.
+    if re.search(r'\d+\(\d+\),\s*\d+\s*[-–—]\s*\d+', full_text):
         return 'journal'
 
     # REPORT: autor institucional con palabras clave de reporte
@@ -229,6 +239,17 @@ def parse_references_from_html(html: str) -> list:
                     raw_issue = issue_m.group(1).strip()
         issue = raw_issue if raw_issue.isdigit() else ''
 
+        # Respaldo sin cursivas: mismo patron "volumen(numero), paginas" que
+        # detecta pub_type='journal' cuando el HTML de origen no envuelve la
+        # revista en <em> (ver _classify_reference_type). Sin esto, volume/
+        # issue quedaban vacios y la post-clasificacion de mas abajo
+        # terminaba bajando el tipo de nuevo a 'book' por "sin volumen".
+        if not volume:
+            vol_issue_m = re.search(r'(\d+)\((\d+)\),\s*\d+\s*[-–—]\s*\d+', full_text)
+            if vol_issue_m and vol_issue_m.group(1) != year:
+                volume = vol_issue_m.group(1)
+                issue  = vol_issue_m.group(2)
+
         # Para webpage/report sin volumen: el <em> no es una revista real → limpiar source
         if pub_type in ('webpage', 'report') and not volume and not issue:
             source = ''
@@ -259,8 +280,12 @@ def parse_references_from_html(html: str) -> list:
                 article_title = unescape(re.sub(r'<[^>]+>', '', title_html)).strip()
                 article_title = re.sub(r'^[\s).]+', '', article_title).strip().strip('.')
 
-        # Para book/report/webpage: título después del año, o el <em> si es el título
-        if pub_type in ('book', 'report', 'webpage') and not article_title and year:
+        # Respaldo para cualquier tipo (originalmente solo book/report/webpage,
+        # pero un journal sin <em> en el HTML de origen -- ver el respaldo de
+        # volumen/issue mas arriba -- tampoco encuentra titulo por el metodo
+        # de arriba, que exige '<em>' in raw): título después del año, o el
+        # <em> si es el título.
+        if not article_title and year:
             # Si hay em pero no source (el em ES el título, ej. VersionOne)
             if first_em and not source:
                 article_title = first_em

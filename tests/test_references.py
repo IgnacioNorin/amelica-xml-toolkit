@@ -138,3 +138,26 @@ def test_autor_personal_no_es_institucional(texto):
 ])
 def test_clasificacion_de_tipo(raw, texto, esperado):
     assert _classify_reference_type(raw, texto) == esperado
+
+
+def test_journal_sin_cursivas_no_cae_a_webpage_o_book():
+    """Caso real: articulo_12.zip trae una referencia de revista sin ningun
+    <em> en el HTML de origen (el "peor caso" de formato ya documentado
+    arriba). Sin el patron de respaldo "volumen(numero), paginas", esto se
+    clasificaba como 'webpage' (por tener URL sin cursiva) y, despues de
+    agregar solo la regla de clasificacion sin arreglar tambien la
+    extraccion de volumen/issue, la post-clasificacion lo volvia a bajar a
+    'book' por "sin volumen". Ambas partes hacen falta."""
+    html = """
+    <p class="reference MsoNormal">López, M., &amp; Heredia, Y. (2019). Uso de
+    dispositivos móviles para la enseñanza de las ciencias: Una perspectiva
+    desde el aprendizaje activo. RIED. Revista Iberoamericana de Educación a
+    Distancia, 22(2), 143-162. https://doi.org/10.5944/ried.22.2.23253.</p>
+    """
+    refs = parse_references_from_html(html)
+    assert len(refs) == 1
+    r = refs[0]
+    assert r["pub_type"] == "journal"
+    assert r["volume"] == "22"
+    assert r["issue"] == "2"
+    assert r["article_title"].startswith("Uso de dispositivos móviles")
