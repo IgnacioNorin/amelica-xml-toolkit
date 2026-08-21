@@ -145,6 +145,11 @@ INDEX_HTML = """
     Mostrar el navegador mientras sube (destildá para que corra oculto)
   </label>
 
+  <label class="toggle-nav" title="Borra las referencias que el artículo ya tenga cargadas en el portal antes de escribir las nuevas.">
+    <input type="checkbox" id="cargar-referencias">
+    ⚠️ Cargar también las referencias (EXPERIMENTAL — borra las referencias preexistentes del artículo)
+  </label>
+
   <button id="convertir">Convertir</button>
 
   <div id="estado-convertir" class="estado"></div>
@@ -313,6 +318,10 @@ INDEX_HTML = """
       return document.getElementById('ver-navegador').checked;
     }
 
+    function cargarReferencias() {
+      return document.getElementById('cargar-referencias').checked;
+    }
+
     async function subirItem(id, zipPath) {
       const btn = document.getElementById(`${id}-btn`);
       const badge = document.getElementById(`${id}-badge`);
@@ -326,7 +335,7 @@ INDEX_HTML = """
       const resp = await fetch('/subir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zip_path: zipPath, headless: !verNavegador() }),
+        body: JSON.stringify({ zip_path: zipPath, headless: !verNavegador(), referencias: cargarReferencias() }),
       });
       const data = await resp.json();
       if (!data.success) {
@@ -513,6 +522,7 @@ def subir():
     data = request.get_json(silent=True) or {}
     zip_path = data.get("zip_path", "")
     headless = bool(data.get("headless"))
+    referencias = bool(data.get("referencias"))
     if not zip_path or not os.path.isfile(zip_path):
         return jsonify({"success": False, "error": f"No existe el ZIP: {zip_path}"}), 400
 
@@ -535,6 +545,8 @@ def subir():
     comando = [sys.executable, "-m", "amelica", "upload", zip_path]
     if not headless:
         comando.append("--show")
+    if referencias:
+        comando.append("--referencias")
 
     def correr():
         try:
