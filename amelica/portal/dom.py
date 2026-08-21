@@ -137,15 +137,32 @@ class DomHelpersMixin:
     async def _click_tab(self, tab_text: str) -> bool:
         """Cambia de pestaña dentro del editor de marcaje (datos del
         articulo / referencias-apendices / texto completo / Datos abiertos).
-        Selector por texto visible, sin clase conocida verificada."""
-        try:
-            locator = self.page.get_by_text(tab_text, exact=False).first
-            await locator.click()
+
+        Las pestañas son <a class="tab-526564616c7963 ..."> (confirmado en
+        vivo, 2026-08-21: la de Referencias es
+        <a id="back-526564616c7963" class="tab-526564616c7963 ...">
+        con texto "<referencias/apéndices/>"). El match generico anterior
+        (buscar tab_text en CUALQUIER elemento de la pagina) agarraba el
+        primer elemento que contuviera esa palabra sin importar si era o no
+        una pestaña -- ej. el boton "Post-inferencia de referencias" del
+        panel de guardado, o el propio "Referencias" del contenido del
+        articulo -- y la pestaña nunca cambiaba, disparando una cascada de
+        ~15 errores en cadena que en realidad eran 1 solo fallo temprano no
+        chequeado. Ahora se busca especificamente entre los <a class*="tab-"]
+        visibles."""
+        clicked = await self.page.evaluate("""(texto) => {
+            const tabs = [...document.querySelectorAll('a[class*="tab-"]')]
+                .filter(el => el.offsetParent !== null);
+            const needle = texto.toLowerCase();
+            const tab = tabs.find(el => (el.innerText || '').toLowerCase().includes(needle));
+            if (tab) { tab.click(); return true; }
+            return false;
+        }""", tab_text)
+        if clicked:
             await asyncio.sleep(1)
             return True
-        except Exception:
-            print(f"   ⚠️  No se pudo cambiar a la pestaña '{tab_text}'")
-            return False
+        print(f"   ⚠️  No se pudo cambiar a la pestaña '{tab_text}'")
+        return False
 
     async def _click_contenteditable_with_text(self, text: str,
                                                 timeout_ms: int = 6000) -> bool:
