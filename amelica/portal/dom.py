@@ -138,31 +138,42 @@ class DomHelpersMixin:
         """Cambia de pestaña dentro del editor de marcaje (datos del
         articulo / referencias-apendices / texto completo / Datos abiertos).
 
-        Las pestañas son <a class="tab-526564616c7963 ..."> (confirmado en
-        vivo, 2026-08-21: la de Referencias es
-        <a id="back-526564616c7963" class="tab-526564616c7963 ...">
-        con texto "<referencias/apéndices/>"). El match generico anterior
-        (buscar tab_text en CUALQUIER elemento de la pagina) agarraba el
-        primer elemento que contuviera esa palabra sin importar si era o no
-        una pestaña -- ej. el boton "Post-inferencia de referencias" del
-        panel de guardado, o el propio "Referencias" del contenido del
-        articulo -- y la pestaña nunca cambiaba, disparando una cascada de
-        ~15 errores en cadena que en realidad eran 1 solo fallo temprano no
-        chequeado. Ahora se busca especificamente entre los <a class*="tab-"]
-        visibles."""
-        clicked = await self.page.evaluate("""(texto) => {
-            const tabs = [...document.querySelectorAll('a[class*="tab-"]')]
+        Las pestañas comparten la clase "tab-526564616c7963", pero el tag y
+        la clase difieren segun esten activas o no (confirmado en vivo,
+        2026-08-21):
+        - Inactiva: <a class="tab-526564616c7963 ...">, ej. la de
+          Referencias, <a id="back-526564616c7963" ...> con texto
+          "<referencias/apéndices/>".
+        - YA ACTIVA (la pestaña en la que ya estás parado): NO es un <a>,
+          es un <div class="tab-526564616c7963 ... tabSeleccionado-...">,
+          ej. "Datos del artículo" es la pestaña activa por defecto al
+          abrir el editor -- <div id="front-526564616c7963"
+          class="... tabSeleccionado-...">. Un primer intento que solo
+          buscaba <a class*="tab-"> nunca la encontraba (no hace falta
+          clickear algo en lo que ya estás) y abortaba el flujo entero.
+
+        Se busca en cualquier elemento con esa clase (no solo <a>): si ya
+        esta activa (tabSeleccionado) se devuelve True sin clickear nada;
+        si no, se clickea. El match generico anterior a estos dos fixes
+        (buscar tab_text en CUALQUIER elemento de la pagina, sin
+        restringir a la clase de pestaña) agarraba elementos ajenos como
+        el boton "Post-inferencia de referencias" del panel de guardado."""
+        result = await self.page.evaluate("""(texto) => {
+            const tabs = [...document.querySelectorAll('[class*="tab-"]')]
                 .filter(el => el.offsetParent !== null);
             const needle = texto.toLowerCase();
             const tab = tabs.find(el => (el.innerText || '').toLowerCase().includes(needle));
-            if (tab) { tab.click(); return true; }
-            return false;
+            if (!tab) return 'not-found';
+            if (/tabSeleccionado/i.test(tab.className)) return 'already-active';
+            tab.click();
+            return 'clicked';
         }""", tab_text)
-        if clicked:
+        if result == 'not-found':
+            print(f"   ⚠️  No se pudo cambiar a la pestaña '{tab_text}'")
+            return False
+        if result == 'clicked':
             await asyncio.sleep(1)
-            return True
-        print(f"   ⚠️  No se pudo cambiar a la pestaña '{tab_text}'")
-        return False
+        return True
 
     async def _click_contenteditable_with_text(self, text: str,
                                                 timeout_ms: int = 6000) -> bool:
