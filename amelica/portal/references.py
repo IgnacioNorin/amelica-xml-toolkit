@@ -20,15 +20,22 @@ tambien esta confirmado: es el mismo boton compartido del editor de
 marker.oa que ya usan con exito el guardado del marcaje y el de "Datos
 del articulo" (verificado inspeccionando el HTML real de ese form).
 
-Sigue sin probarse en vivo: solo queda el llenado completo de una
-referencia y el guardado real de punta a punta (con --referencias sobre
-un articulo de prueba), y autores institucionales (existe un boton
-"Autor institucional" con caja title="Institución" que _add_ref_authors
-no contempla). El parser que alimenta esto (parsing/references.py) si
-esta validado. Para seguir verificando: correr con --referencias sobre un
-numero de prueba, o repetir la grabacion con tools/grabador_referencias.js
-(pegar en la consola del navegador mientras se completa una referencia a
-mano en el portal).
+Autores institucionales tambien confirmados (2026-08-21, grabacion en
+vivo): la caja "Autor" (personal) pre-creada por defecto NO se puede
+borrar, asi que si el (unico) autor es institucional esa caja se deja
+vacia sin tocar y el institucional se agrega aparte con el boton "Autor
+institucional" + campo title="Institución". _add_ref_authors ya lo hace
+asi, enrutando segun el mismo criterio que usa el parser para marcar un
+autor institucional (given='').
+
+Sigue sin probarse en vivo: el llenado completo de una referencia real y
+el guardado de punta a punta con --referencias sobre un articulo de
+prueba (los selectores individuales ya estan verificados, pero no se
+corrio el flujo completo end-to-end). El parser que alimenta esto
+(parsing/references.py) si esta validado. Para seguir verificando: correr
+con --referencias sobre un numero de prueba, o repetir la grabacion con
+tools/grabador_referencias.js (pegar en la consola del navegador mientras
+se completa una referencia a mano en el portal).
 """
 
 import asyncio
@@ -205,24 +212,48 @@ class ReferencesMixin:
 
     async def _add_ref_authors(self, authors: list) -> bool:
         """Llena los autores de la referencia activa.
-        El primer autor viene pre-creado vacío; los demás se agregan con botón."""
+
+        El parser (parsing/references.py) marca un autor institucional con
+        given='' -- mismo criterio que _is_institutional_author.
+
+        El primer autor "personal" (Nombre(s)/Apellido(s)) viene pre-creado
+        vacío, pero esa caja NO SE PUEDE BORRAR (confirmado por el usuario
+        grabando el flujo real en el portal, 2026-08-21). Si el (unico)
+        autor es institucional, esa caja pre-creada se deja vacia sin
+        tocar, y el autor institucional se agrega aparte con el boton
+        "Autor institucional" + el campo title="Institución". Por eso el
+        indice para decidir "hay que crear una caja nueva o ya existe una
+        vacia" se lleva aparte (personal_added), no por posicion en la
+        lista de autores."""
         if not authors:
             return True
 
-        for i, author in enumerate(authors):
+        personal_added = False
+        for author in authors:
             given   = author.get('given', '')
             surname = author.get('surname', '')
+            institutional = not given and surname
 
-            if i > 0:
-                # Crear autor adicional con botón "Autores"
+            if institutional:
+                await self._click_caja('Autores')
+                clicked = await self._click_menu_button('Autor institucional')
+                if not clicked:
+                    print(f"      ⚠️  No se pudo crear autor institucional")
+                    continue
+                await asyncio.sleep(0.4)
+                await self._fill_ref_contenido('Institución', surname, nth='last')
+                continue
+
+            if personal_added:
+                # Ya se uso la caja "Autor" pre-creada -> crear una nueva
                 await self._click_caja('Autores')
                 clicked = await self._click_menu_button('Autor')
                 if not clicked:
-                    print(f"      ⚠️  No se pudo crear autor {i+1}")
+                    print(f"      ⚠️  No se pudo crear autor")
                     continue
                 await asyncio.sleep(0.4)
+            personal_added = True
 
-            # Llenar Nombre(s) y Apellido(s) del último autor creado
             await self._fill_ref_contenido('Nombre(s)', given,   nth='last')
             await self._fill_ref_contenido('Apellido(s)', surname, nth='last')
 
