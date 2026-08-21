@@ -28,6 +28,19 @@ institucional" + campo title="Institución". _add_ref_authors ya lo hace
 asi, enrutando segun el mismo criterio que usa el parser para marcar un
 autor institucional (given='').
 
+DOI y URL tambien confirmados (2026-08-21, grabacion en vivo): son dos
+campos DISTINTOS en el portal, no uno solo. "Identificador de la
+publicación" (select[class*="pub-id-type-"] con opciones Identificador
+de acceso/DOI/Otro) es para el DOI -- al elegir "DOI" el campo se
+pre-llena con "https://doi.org/", pero como _fill_ref_contenido hace
+selectAll+delete antes de tipear, alcanza con insertar el DOI completo.
+"URL" es un campo aparte para un link generico, se tipea completo sin
+prefijo. El campo `url` que devuelve el parser puede traer cualquiera de
+los dos (viene de un href="..." o del primer https:// en el texto), asi
+que _fill_single_reference lo enruta por forma: si matchea
+https://doi.org/... va a "Identificador de la publicación" con tipo doi,
+si no, va a "URL".
+
 Sigue sin probarse en vivo: el llenado completo de una referencia real y
 el guardado de punta a punta con --referencias sobre un articulo de
 prueba (los selectores individuales ya estan verificados, pero no se
@@ -39,6 +52,7 @@ se completa una referencia a mano en el portal).
 """
 
 import asyncio
+import re
 
 
 class ReferencesMixin:
@@ -126,6 +140,27 @@ class ReferencesMixin:
         }""", pub_type)
         if result:
             await asyncio.sleep(0.8)  # esperar que cambien los botones disponibles
+        return result
+
+    async def _set_ref_pub_id_type(self, id_type: str = 'doi') -> bool:
+        """Selecciona el tipo de identificador ('doi', 'access-id' u 'other')
+        en la caja "Identificador de la publicación" de la Referencia
+        detallada activa (select[class*="pub-id-type-"]). Mismo mecanismo
+        que _set_ref_pub_type. Confirmado en vivo (2026-08-21): al elegir
+        'doi' el campo se pre-llena con "https://doi.org/", pero como
+        _fill_ref_contenido hace selectAll+delete antes de tipear, alcanza
+        con insertar el DOI completo ahi -- no hace falta tipear solo el
+        sufijo."""
+        result = await self.page.evaluate("""(id_type) => {
+            const sel = [...document.querySelectorAll('select[class*="pub-id-type-"]')]
+                .filter(el => el.offsetParent !== null).at(-1);
+            if (!sel) return false;
+            sel.value = id_type;
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+            return true;
+        }""", id_type)
+        if result:
+            await asyncio.sleep(0.5)
         return result
 
     async def _fill_ref_contenido(self, title_attr: str, text: str,
@@ -342,13 +377,24 @@ class ReferencesMixin:
                     await asyncio.sleep(0.3)
                     await self._fill_ref_contenido('Paginación electrónica', elocation)
 
-        # URL (todos los tipos)
+        # DOI / URL (todos los tipos) -- son dos campos distintos en el
+        # portal, confirmados en vivo (2026-08-21): "Identificador de la
+        # publicación" (con su propio select DOI/Identificador de acceso/
+        # Otro) para el DOI, y "URL" para un link generico. El campo url
+        # que devuelve el parser puede traer cualquiera de los dos, asi que
+        # se enruta segun si tiene forma de URL de DOI.
         url = ref.get('url', '')
         if url:
             await self._click_caja(det_title)
-            if await self._click_menu_button('URL'):
-                await asyncio.sleep(0.3)
-                await self._fill_ref_contenido('URL', url)
+            if re.match(r'https?://(dx\.)?doi\.org/', url):
+                if await self._click_menu_button('Identificador de la publicación'):
+                    await asyncio.sleep(0.3)
+                    await self._set_ref_pub_id_type('doi')
+                    await self._fill_ref_contenido('Identificador de la publicación', url)
+            else:
+                if await self._click_menu_button('URL'):
+                    await asyncio.sleep(0.3)
+                    await self._fill_ref_contenido('URL', url)
 
         return True
 
