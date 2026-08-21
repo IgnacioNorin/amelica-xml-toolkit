@@ -3,15 +3,26 @@ references.py — Llenado de la pestania "Referencias" en el portal.
 
 ESTADO: NO conectado al flujo automatico. Se ejecuta solo con --referencias.
 
-Motivo: es automatizacion a ciegas (sleeps fijos + selectores hardcodeados)
-que nunca se verifico contra el portal real, y `_delete_refs_but_one` borra
-referencias preexistentes antes de escribir — la operacion mas destructiva
-del proyecto. El parser que alimenta esto (parsing/references.py) si esta
-validado; lo que falta verificar es la escritura en el portal.
+Motivo: `_delete_refs_but_one` borra referencias preexistentes antes de
+escribir -- la operacion mas destructiva del proyecto -- y la escritura
+en el portal solo se verifico parcialmente. El 2026-08-20 se grabo una
+referencia JOURNAL completa a mano en el portal real (click-a-click, con
+un script en la consola del navegador) para confirmar los selectores: la
+mayoria coincidia con lo que este archivo ya asumia (Referencia completa,
+Referencia detallada - JOURNAL, Nombre(s)/Apellido(s), Fuente, Volumen,
+Numero, Pagina inicial/final, Paginacion electronica, Titulo del articulo,
+el select publication-type-). Se encontro y arreglo un mismatch real:
+Año NO es un span editable como asumia _fill_ref_year -- es un
+select[class*="iso-8601-date-"], igual mecanismo que publication-type-.
 
-Se conserva porque el mapeo de selectores costo sesiones de grabacion y
-rehacerlo desde cero seria caro. Para retomarlo: correr con --referencias
-sobre un numero de prueba, empezando por revisar _delete_refs_but_one.
+Sigue sin probarse en vivo: el boton Guardar de esta pestaña (no se llego
+a clickear en la grabacion), y autores institucionales (existe un boton
+"Autor institucional" con caja title="Institución" que _add_ref_authors
+no contempla). El parser que alimenta esto (parsing/references.py) si
+esta validado. Para seguir verificando: correr con --referencias sobre un
+numero de prueba, o repetir la grabacion con tools/grabador_referencias.js
+(pegar en la consola del navegador mientras se completa una referencia a
+mano en el portal).
 """
 
 import asyncio
@@ -139,57 +150,49 @@ class ReferencesMixin:
 
     async def _fill_ref_year(self, year: str) -> bool:
         """Llena el campo Año de la referencia activa.
-        El campo Año en referencias puede no tener span.contenido- inicial —
-        se intenta activar y tipear; si no hay span, se inyecta directamente."""
-        result = await self.page.evaluate("""(year) => {
+
+        Confirmado grabando una referencia a mano en el portal
+        (2026-08-20): a diferencia de los demas campos de texto libre
+        (Fuente, Volumen, etc.), Año NO es un span[contenteditable] --
+        es un <select class="iso-8601-date-..."> con una opcion por año
+        (igual mecanismo que el select de tipo de publicacion). La version
+        anterior de este metodo asumia un span editable (con un fallback
+        de inyectar uno a mano) y nunca tocaba ese select, asi que nunca
+        funciono contra el portal real."""
+        # Primero activar la caja "Año" para que el select se muestre/monte
+        # (igual que los demas campos, algunos selects de PrimeFaces no
+        # existen en el DOM hasta que se hace click en su contenedor).
+        await self.page.evaluate("""() => {
             const cajas = [...document.querySelectorAll('[title="Año"]')]
                 .filter(el => el.offsetParent !== null);
-            if (!cajas.length) return 'not-found';
             const caja = cajas[cajas.length - 1];
-
-            caja.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
-            caja.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true, cancelable:true, view:window}));
-            caja.dispatchEvent(new MouseEvent('click',     {bubbles:true, cancelable:true, view:window}));
-            caja.focus();
-
-            // Buscar span contenteditable (puede aparecer al activar)
-            let span = caja.querySelector('[contenteditable="true"]');
-            if (span) {
-                span.click(); span.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('delete',    false, null);
-                document.execCommand('insertText', false, year);
-                // Actualizar hidden input iso-8601-date
-                const hidden = caja.querySelector('[title*="iso-8601"]');
-                if (hidden) { hidden.value = year; hidden.dispatchEvent(new Event('change', {bubbles:true})); }
-                return 'span-ok';
+            if (caja) {
+                caja.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+                caja.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true, cancelable:true, view:window}));
+                caja.dispatchEvent(new MouseEvent('click',     {bubbles:true, cancelable:true, view:window}));
             }
+        }""")
+        await asyncio.sleep(0.3)
 
-            // Sin span: crear uno e inyectar el año
-            const newSpan = document.createElement('span');
-            newSpan.className = [...caja.classList]
-                .find(c => c.startsWith('contenido')) || 'contenido-526564616c7963';
-            newSpan.setAttribute('contenteditable', 'true');
-            newSpan.textContent = year;
-            caja.insertBefore(newSpan, caja.firstChild);
-
-            // Actualizar hidden input
-            const hidden = caja.querySelector('[title*="iso-8601"]');
-            if (hidden) {
-                const setter = Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value').set;
-                setter.call(hidden, year);
-                hidden.dispatchEvent(new Event('input',  {bubbles:true}));
-                hidden.dispatchEvent(new Event('change', {bubbles:true}));
+        result = await self.page.evaluate("""(year) => {
+            const sel = [...document.querySelectorAll('select[class*="iso-8601-date-"]')]
+                .filter(el => el.offsetParent !== null).at(-1);
+            if (!sel) return 'not-found';
+            for (const opt of sel.options) {
+                if (opt.text.trim() === String(year)) {
+                    sel.value = opt.value;
+                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+                    return 'ok';
+                }
             }
-            // Disparar editInput de AmeliCA si existe
-            if (typeof editInput526564616c7963 === 'function')
-                editInput526564616c7963('iso-8601-date-526564616c7963');
-            return 'injected';
+            return 'no-match';
         }""", year)
 
         if result == 'not-found':
-            print(f"      ⚠️  Campo Año no encontrado")
+            print(f"      ⚠️  Select de Año no encontrado")
+            return False
+        if result == 'no-match':
+            print(f"      ⚠️  Año '{year}' no está entre las opciones del select")
             return False
         print(f"      ✅ Año: {year} ({result})")
         return True
