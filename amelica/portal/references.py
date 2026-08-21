@@ -417,7 +417,32 @@ class ReferencesMixin:
                     await asyncio.sleep(0.3)
                     await self._fill_ref_contenido('URL', url)
 
+        # Cerrar la caja "Referencia detallada" antes de pasar a la
+        # siguiente referencia. En la grabacion en vivo del flujo manual
+        # aparece un boton title="Cerrar" (class="close-...") que se
+        # clickea repetidas veces al terminar de editar la caja. Sin este
+        # cierre, una corrida real (2026-08-21, 16 refs) no podia crear
+        # NINGUNA referencia despues de la primera -- "No se pudo clickear
+        # el boton 'Referencia'" en cascada -- probablemente porque la caja
+        # de la referencia anterior quedaba activa/enfocada y bloqueaba el
+        # menu de "Referencias" para agregar la siguiente.
+        await self._click_ref_close()
+
         return True
+
+    async def _click_ref_close(self) -> bool:
+        """Clickea el boton 'Cerrar' (title="Cerrar", class="close-...")
+        mas reciente visible, para colapsar la caja de referencia activa."""
+        clicked = await self.page.evaluate("""() => {
+            const all = [...document.querySelectorAll('[title="Cerrar"]')]
+                .filter(el => el.offsetParent !== null);
+            if (!all.length) return false;
+            all[all.length - 1].click();
+            return true;
+        }""")
+        if clicked:
+            await asyncio.sleep(0.3)
+        return clicked
 
     async def fill_references(self, refs: list) -> bool:
         """Completa la pestaña 'Referencias' con los datos parseados del HTML.
