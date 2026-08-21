@@ -124,29 +124,23 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 | Subida del ZIP y alta del artículo | Funciona, usado en producción |
 | Parser de referencias | Validado: 376 refs sobre 12 artículos, con tests |
 | Marcaje de secciones | **Verificado en vivo**: guardado confirmado (click + spinner de JSF) en varias corridas reales |
-| Datos del artículo (front matter) | **Roto en vivo**: nunca llegó a completar un artículo de punta a punta (ver más abajo) |
+| Datos del artículo (front matter) | **Verificado en vivo**: completado de punta a punta en corridas reales, incluidos autores, ORCID, fechas, resúmenes y DOI |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
 
-### Pendiente: "Datos del artículo" nunca se completó en vivo (2026-08-19)
+### Flujo completo verificado en vivo (2026-08-20)
 
-En las corridas reales vistas hasta ahora, el marcaje de secciones se guarda
-bien (confirmado: click en "Guardar" + el spinner de JSF completa su ciclo),
-pero el paso siguiente, completar "Datos del artículo" (títulos, autores,
-fechas, resúmenes), **nunca se probó de punta a punta**. En dos corridas
-sobre el mismo artículo (1393), la pestaña "Datos del artículo" no se pudo
-abrir — la causa confirmada en una de ellas: el portal devolvió un **403
-Forbidden** al reintentar entrar al editor de marcaje via `reload()`/`goto()`
-directo a `marker.oa` (el server rechaza el acceso directo a esa URL sin
-pasar por el flujo normal de click "Marcar"). Por eso se sacó del flujo por
-defecto el reload de re-verificación que existía después de guardar el
-marcaje (nunca confirmó nada en ninguna corrida real, y en este caso además
-rompía la página para el paso siguiente) — ver el comentario en
-`AmelicaMarker.run()`. Con eso sacado, falta una corrida limpia que llegue a
-completar "Datos del artículo" para saber si el resto de esa etapa (títulos
-ES/EN, autores, fechas, resúmenes/keywords) funciona.
+Con el 403 del reload de verificación resuelto (ver `AmelicaMarker.run()`) y
+la confirmación del ZIP reescrita para leer la respuesta ajax en vez de
+hacer polling del DOM (`uploader.upload_zip()`), se corrieron los 12
+artículos de prueba de punta a punta: login, alta del artículo (incluida
+*Sección*, que ya no falla), subida del ZIP, marcaje de secciones, y
+"Datos del artículo" completo (títulos ES/EN, autores con ORCID,
+afiliaciones, fechas, resúmenes/keywords, DOI). Las 8 etapas quedan en OK.
 
-También quedó sin resolver que el alta no completa el campo *Sección*
-(`ID no encontrado en la pagina: seccion`).
+De paso se encontraron y arreglaron dos bugs de extracción de ORCID
+(`amelica/parsing/html.py`) con artefactos reales de InDesign: un espacio
+colado en el href (perdía el ORCID de todos los autores en silencio) y una
+barra sobrante que desalineaba el ORCID de un autor con el de otro.
 
 ### Protecciones contra sobrescritura
 
