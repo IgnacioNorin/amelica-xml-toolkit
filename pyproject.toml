@@ -2,7 +2,12 @@
 name = "amelica"
 version = "2.0.0"
 description = "Automatizacion de carga de articulos cientificos en AmeliCA XML"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    { name = "Ignacio Norin", email = "ignac.norin@gmail.com" },
+]
+license = { text = "All rights reserved" }
 dependencies = [
     "playwright>=1.40",
     "python-docx>=1.1",

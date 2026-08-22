@@ -1,8 +1,14 @@
-# Amelica Automatización
+# Amelica XML Toolkit
 
 Automatiza la carga de artículos científicos en el portal [AmeliCA XML](https://portal.amelica.org):
 toma un artículo exportado a HTML, lo sube, crea el registro, marca las
 secciones y completa los datos del artículo — sin hacerlo a mano.
+
+> **Nota**: esto automatiza un portal específico (AmeliCA XML). Para
+> probar el flujo completo hace falta una cuenta real ahí, con acceso de
+> editor a alguna revista. Sin cuenta, igual se puede: correr `pytest`
+> (142 tests, no necesitan portal ni credenciales), o leer el código del
+> parser (`amelica/parsing/`), que es puro y se prueba solo.
 
 ## Instalación
 
@@ -21,7 +27,7 @@ pip install -e ".[dev]"    # pytest
 
 ## Credenciales
 
-Copiá la plantilla y editá el archivo con tus datos reales:
+Copia la plantilla y edita el archivo con tus datos reales:
 
 ```bash
 cp credentials.example.json credentials.json
@@ -44,9 +50,9 @@ pueden usar las variables de entorno `AMELICA_EMAIL`, `AMELICA_PASSWORD` y
 
 ## Uso
 
-El camino recomendado empieza en Word: abrí el DOCX → *Guardar como* →
+El camino recomendado empieza en Word: abre el DOCX → *Guardar como* →
 **Página web filtrada (.htm, .html)**. Eso genera `index.html` +
-`index_archivos/`. Comprimí ambos en un `index.zip` y subilo:
+`index_archivos/`. Comprime ambos en un `index.zip` y súbelo:
 
 ```bash
 amelica upload index.zip --show
@@ -72,13 +78,46 @@ amelica upload index.zip --titulo "Mi título" --idioma Inglés \
 
 También funciona sin instalar: `python -m amelica upload index.zip`.
 
-### Convertir .idml
+### Convertir .idml y subir desde una web local
 
-Para artículos que llegan como InDesign:
+Para artículos que llegan como InDesign, o para manejar varios artículos
+a la vez sin usar la terminal:
 
 ```bash
-python -m amelica.idml.webapp    # abrir http://localhost:5000
+python -m amelica.idml.webapp    # abre el navegador solo en http://localhost:5000
 ```
+
+Requiere el extra `idml` (`pip install -e ".[idml]"`). Todo corre en tu
+propia máquina — nada se sube a ningún servidor externo salvo el portal
+AmeliCA en sí. Qué hace:
+
+- **Convertir** uno o varios `.idml` a `index.zip` de una.
+- **Cola de subida** reordenable (arrastrando o escribiendo la posición),
+  con botón para subir todo en orden — correrlas en paralelo rompe el
+  portal (dos sesiones con la misma cuenta chocan entre sí), así que
+  siempre van una detrás de otra.
+- **"Agregar carpeta con varios artículos"**: busca automáticamente todos
+  los `index.zip` dentro de las subcarpetas de una carpeta (el patrón que
+  arma la propia conversión: `carpeta/nombre_articulo/index.zip`), sin
+  necesidad de mover ni renombrar nada.
+- **Panel de progreso por etapa**: en vez de un log crudo, muestra una
+  línea de tiempo con las mismas 8 etapas de `AmelicaUploader.print_summary()`
+  (login, número, artículo, ZIP, editor, marcaje, datos del artículo,
+  referencias), coloreada por estado. El log crudo sigue disponible atrás
+  de un botón, por si hace falta para depurar un error puntual.
+- **Historial persistente** (`historial_subidas.jsonl`, en `.gitignore`):
+  a diferencia de la cola (que es solo de esa pestaña del navegador), el
+  historial sobrevive a cerrar el servidor — queda qué se subió, cuándo, y
+  cómo salió cada etapa.
+- **Recupera trabajos en curso al recargar la página**: si se cierra o
+  recarga la pestaña de la webapp a mitad de una subida, el subproceso
+  sigue corriendo del lado del servidor y la webapp lo vuelve a encontrar
+  al abrir de nuevo. **Límite real**: esto NO puede revivir la ventana de
+  Chromium que abre `--show` si se la cierra manualmente — Playwright
+  pierde el control del navegador en el acto y esa subida termina fallada
+  (esperado, no es un bug: no hay forma de "seguir" sin el navegador).
+- Credenciales cargadas ahí quedan solo en memoria del proceso, nunca se
+  escriben a `credentials.json` ni a ningún archivo.
 
 ## Qué hace, paso a paso
 
@@ -109,7 +148,9 @@ amelica/
     marker.py         Marcaje de secciones
     references.py     Llenado de referencias (experimental, ver abajo)
   idml/             Conversor .idml -> index.zip + web local
-tests/              Tests del parser de referencias
+    converter.py      Conversor .idml -> index.zip
+    webapp.py         Web local: convertir, cola de subida, historial
+tests/              142 tests: parser, DOM del portal, y la web local
 fixtures/           ZIPs reales usados por los tests
 ```
 
@@ -126,6 +167,7 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 | Marcaje de secciones | **Verificado en vivo**: guardado confirmado (click + spinner de JSF) en varias corridas reales |
 | Datos del artículo (front matter) | **Verificado en vivo**: completado de punta a punta en corridas reales, incluidos autores, ORCID, fechas, resúmenes y DOI |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
+| Web local (`idml/webapp.py`) | **Verificado en vivo**: cola, panel de progreso, historial y recuperación al recargar, con 33 tests propios (endpoints Flask + lógica JS) |
 
 ### Flujo completo verificado en vivo (2026-08-20)
 
@@ -165,7 +207,7 @@ python tools/smoke_test.py --inspeccionar
 ```
 
 > Los ZIPs de `ArticulosZip/` ya están publicados. No sirven para probar el
-> flujo completo: usá un artículo que no exista en el número destino.
+> flujo completo: usa un artículo que no exista en el número destino.
 
 ### Sobre las referencias
 
@@ -188,19 +230,36 @@ referencias detectó para que las cargues a mano. Para retomarlo:
 amelica upload index.zip --show --referencias   # experimental
 ```
 
-Probalo primero sobre un número de prueba, y empezá revisando
+Pruébalo primero sobre un número de prueba, y empieza revisando
 `_delete_refs_but_one()`.
 
 ## Tests
 
 ```bash
+pip install -e ".[dev,idml]"
 pytest
 ```
 
-Son tests de regresión sobre `fixtures/`: fijan el rendimiento medido del
-parser para que un cambio futuro no lo degrade en silencio. `articulo_12.zip`
-es el peor caso conocido (HTML de origen con otro formato, sin cursivas para
-la fuente) y está incluido a propósito.
+142 tests en total, sin abrir ningún navegador ni tocar el portal real:
+
+- **Parser y DOM del portal** (`amelica/parsing/`, `amelica/portal/`): tests
+  de regresión sobre `fixtures/` que fijan el rendimiento medido del parser
+  para que un cambio futuro no lo degrade en silencio. `articulo_12.zip` es
+  el peor caso conocido (HTML de origen con otro formato, sin cursivas para
+  la fuente) y está incluido a propósito.
+- **Web local** (`tests/test_webapp.py`): endpoints Flask (`/subir`,
+  `/convert`, `/historial`, `/trabajos-activos`, etc.) con
+  `app.test_client()` — no lanza ningún subproceso real de `amelica upload`
+  ni abre diálogos de tkinter, solo valida lo que la webapp hace antes de
+  llegar a eso.
+- **Web local, lado JS** (`tests/test_webapp_js.py`): la lógica del
+  `<script>` embebido (parseo de etapas, panel de progreso, reordenar la
+  cola) corrida de verdad con Node y un DOM mínimo simulado a mano — sin
+  agregar ningún framework de JS al proyecto.
+
+`test_webapp.py` se saltea limpio si falta `flask` (extra `idml`);
+`test_webapp_js.py` se saltea limpio si no hay `node` instalado. Ninguno de
+los dos rompe la colección de tests para quien instaló sin esos extras.
 
 ## Limitaciones conocidas
 
@@ -211,3 +270,15 @@ la fuente) y está incluido a propósito.
   cursiva (ver `articulo_12.zip`).
 - La conversión DOCX vía Word solo funciona en Windows con Word instalado;
   si no está, cae al conversor propio, de menor calidad.
+- La web local recupera trabajos en curso si se recarga su propia pestaña,
+  pero no puede revivir la ventana de Chromium que abre `--show` si se
+  cierra manualmente -- Playwright pierde el control del navegador ahí
+  mismo y esa subida termina fallada (comportamiento esperado, no un bug).
+
+## Licencia
+
+Todos los derechos reservados. El código queda público para consulta,
+evaluación y uso personal, pero no está bajo ninguna licencia de código
+abierto -- no está permitido reutilizarlo, redistribuirlo ni incorporarlo
+a otro proyecto sin permiso explícito. Si te interesa usar algo de aquí,
+escribime.

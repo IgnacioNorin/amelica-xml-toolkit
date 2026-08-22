@@ -1,5 +1,8 @@
 __pycache__/
+.pytest_cache/
 credentials.json
+historial_subidas.jsonl
+.claude/
 
 # Capturas del handler de errores (amelica_uploader._ss)
 error_fatal_*.png
