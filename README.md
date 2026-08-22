@@ -1,5 +1,7 @@
 # Amelica XML Toolkit
 
+[![Tests](https://github.com/IgnacioNorin/amelica-xml-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/IgnacioNorin/amelica-xml-toolkit/actions/workflows/tests.yml)
+
 Automatiza la carga de artículos científicos en el portal [AmeliCA XML](https://portal.amelica.org):
 toma un artículo exportado a HTML, lo sube, crea el registro, marca las
 secciones y completa los datos del artículo — sin hacerlo a mano.
