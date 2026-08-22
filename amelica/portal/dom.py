@@ -67,7 +67,7 @@ class DomHelpersMixin:
         }""", [title_attr, nth])
 
         if result == 'not-found':
-            print(f"   ⚠️  No se pudo activar la caja '{title_attr}' (no encontrada)")
+            print(f"   No se pudo activar la caja '{title_attr}' (no encontrada)")
             return False
 
         # Esperar a que la clase focus- aparezca (señal de que el handler procesó)
@@ -83,7 +83,7 @@ class DomHelpersMixin:
 
         # Si después de 2s no tiene focus-, igual continuamos (puede que el
         # título= de esta caja no use ese patrón de clase)
-        print(f"   ℹ️  Caja '{title_attr}': clase focus- no apareció — continuando igual")
+        print(f"   Caja '{title_attr}': clase focus- no apareció — continuando igual")
         return True
 
     async def _click_menu_button(self, text: str, timeout_ms: int = 5000) -> bool:
@@ -96,7 +96,7 @@ class DomHelpersMixin:
             await locator.click()
             return True
         except Exception:
-            print(f"   ⚠️  No se pudo clickear el boton '{text}' (¿no visible o no existe?)")
+            print(f"   No se pudo clickear el boton '{text}' (¿no visible o no existe?)")
             return False
 
     async def _select_option_containing_class(self, class_substring: str, option_text: str, timeout_ms: int = 5000) -> bool:
@@ -110,7 +110,7 @@ class DomHelpersMixin:
             await locator.select_option(label=option_text)
             return True
         except Exception:
-            print(f"   ⚠️  No se pudo seleccionar '{option_text}' en select[class*={class_substring}]")
+            print(f"   No se pudo seleccionar '{option_text}' en select[class*={class_substring}]")
             return False
 
     async def _type_in_last_contenteditable(self, text: str) -> bool:
@@ -123,7 +123,7 @@ class DomHelpersMixin:
             elements = self.page.locator('[contenteditable="true"]:visible')
             count = await elements.count()
             if count == 0:
-                print("   ⚠️  Sin contenteditable visible para tipear ORCID")
+                print("   Sin contenteditable visible para tipear ORCID")
                 return False
             target = elements.nth(count - 1)
             await target.click()
@@ -131,7 +131,7 @@ class DomHelpersMixin:
             await self.page.keyboard.type(text)
             return True
         except Exception as e:
-            print(f"   ⚠️  No se pudo tipear ORCID '{text[:30]}': {e}")
+            print(f"   No se pudo tipear ORCID '{text[:30]}': {e}")
             return False
 
     async def _click_tab(self, tab_text: str) -> bool:
@@ -169,7 +169,7 @@ class DomHelpersMixin:
             return 'clicked';
         }""", tab_text)
         if result == 'not-found':
-            print(f"   ⚠️  No se pudo cambiar a la pestaña '{tab_text}'")
+            print(f"   No se pudo cambiar a la pestaña '{tab_text}'")
             return False
         if result == 'clicked':
             await asyncio.sleep(1)
@@ -216,13 +216,13 @@ class DomHelpersMixin:
 
             if result is not None:
                 await asyncio.sleep(0.4)
-                print(f"      ✅ Click en campo pre-relleno: '{result}'")
+                print(f"      Click en campo pre-relleno: '{result}'")
                 return True
 
             if attempt < 2:
                 await asyncio.sleep(timeout_ms / 3000.0)
 
-        print(f"      ⚠️  Sin contenteditable con texto: '{text_s[:50]}'")
+        print(f"      Sin contenteditable con texto: '{text_s[:50]}'")
         return False
 
     async def _fill_datepicker(self, date_str: str) -> bool:
@@ -245,7 +245,7 @@ class DomHelpersMixin:
         """
         parts = date_str.replace('/', '-').split('-')
         if len(parts) != 3:
-            print(f"   ⚠️  Formato de fecha irreconocible: '{date_str}'")
+            print(f"   Formato de fecha irreconocible: '{date_str}'")
             return False
         try:
             if len(parts[0]) == 4:          # YYYY-MM-DD
@@ -253,7 +253,7 @@ class DomHelpersMixin:
             else:                            # DD-MM-YYYY
                 day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
         except ValueError:
-            print(f"   ⚠️  Fecha no numérica: '{date_str}'")
+            print(f"   Fecha no numérica: '{date_str}'")
             return False
 
         month_idx = month - 1   # jQuery UI: meses 0-based
@@ -278,8 +278,8 @@ class DomHelpersMixin:
             if opened:
                 await asyncio.sleep(0.5)
             else:
-                print(f"      ⚠️  Datepicker no visible y no se pudo abrir — "
-                      f"completá la fecha {date_str} manualmente")
+                print(f"      Datepicker no visible y no se pudo abrir — "
+                      f"completa la fecha {date_str} manualmente")
                 return False
 
         # Seleccionar mes y año en los selects del datepicker.
@@ -305,7 +305,7 @@ class DomHelpersMixin:
         }""", month_idx)
 
         if month_result == 'dp-hidden':
-            print(f"      ⚠️  Datepicker se ocultó antes de setear el mes para {date_str}")
+            print(f"      Datepicker se ocultó antes de setear el mes para {date_str}")
             return False
 
         await asyncio.sleep(0.3)    # dejar que jQuery UI re-renderice tras el cambio de mes
@@ -321,7 +321,7 @@ class DomHelpersMixin:
         }""", year)
 
         if year_result == 'dp-hidden':
-            print(f"      ⚠️  Datepicker se ocultó antes de setear el año para {date_str}")
+            print(f"      Datepicker se ocultó antes de setear el año para {date_str}")
             return False
 
         await asyncio.sleep(0.4)    # esperar re-render del calendario
@@ -351,12 +351,12 @@ class DomHelpersMixin:
         }""", day)
 
         if day_clicked:
-            print(f"      ✅ Fecha seleccionada: {day:02d}/{month:02d}/{year}")
+            print(f"      Fecha seleccionada: {day:02d}/{month:02d}/{year}")
             await asyncio.sleep(0.3)
             return True
         else:
-            print(f"      ⚠️  Día {day} no encontrado en el datepicker — "
-                  f"completá {date_str} manualmente")
+            print(f"      Día {day} no encontrado en el datepicker — "
+                  f"completa {date_str} manualmente")
             return False
 
     async def _type_in_caja_contenido(self, title_attr: str, text: str) -> bool:
@@ -391,10 +391,10 @@ class DomHelpersMixin:
         }""", [title_attr])
 
         if result != 'ok':
-            print(f"      ⚠️  _type_in_caja_contenido ({result}): '{title_attr}'")
+            print(f"      _type_in_caja_contenido ({result}): '{title_attr}'")
             return False
 
         await asyncio.sleep(0.2)
         await self.page.keyboard.type(text, delay=8)
-        print(f"      ✅ Tipeado en '{title_attr}': '{text[:55]}'")
+        print(f"      Tipeado en '{title_attr}': '{text[:55]}'")
         return True

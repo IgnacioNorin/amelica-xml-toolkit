@@ -49,7 +49,7 @@ def fix_zip_for_amelica(src_zip: str) -> str:
             os.path.join(extract_dir, resources_dir_old),
             os.path.join(extract_dir, resources_dir_new),
         )
-        print(f"   🔧 Carpeta renombrada: {resources_dir_old}/ → {resources_dir_new}/")
+        print(f"   Carpeta renombrada: {resources_dir_old}/ → {resources_dir_new}/")
 
         html_p = os.path.join(extract_dir, 'index.html')
         if os.path.exists(html_p):
@@ -76,7 +76,7 @@ def fix_zip_for_amelica(src_zip: str) -> str:
                 zf.write(abs_path, arc_name)
 
     kb = os.path.getsize(zip_p) // 1024
-    print(f"   📦 ZIP corregido ({kb} KB): {zip_p}")
+    print(f"   ZIP corregido ({kb} KB): {zip_p}")
     shutil.rmtree(extract_dir, ignore_errors=True)
     return zip_p
 
@@ -108,14 +108,14 @@ def build_zip_from_docx(docx_path: str, output_dir: str = None) -> str:
             doc.SaveAs2(html_out, FileFormat=8)
             doc.Close(False)
             converted = True
-            print("   ✅ Convertido con Microsoft Word")
+            print("   Convertido con Microsoft Word")
         finally:
             word.Quit()
             pythoncom.CoUninitialize()
     except ImportError:
-        print("   ℹ️  pywin32 no instalado — para mejor calidad: pip install pywin32")
+        print("   pywin32 no instalado — para mejor calidad: pip install pywin32")
     except Exception as e:
-        print(f"   ⚠️  Word falló: {e}")
+        print(f"   Word falló: {e}")
 
     # ── 2. LibreOffice ────────────────────────────────────────────────
     if not converted:
@@ -140,13 +140,13 @@ def build_zip_from_docx(docx_path: str, output_dir: str = None) -> str:
                     if os.path.exists(lo_dir):
                         os.rename(lo_dir, os.path.join(tmpdir, 'index_archivos'))
                     converted = True
-                    print("   ✅ Convertido con LibreOffice")
+                    print("   Convertido con LibreOffice")
             except Exception as e:
-                print(f"   ⚠️  LibreOffice falló: {e}")
+                print(f"   LibreOffice falló: {e}")
 
     # ── 3. Fallback python-docx ───────────────────────────────────────
     if not converted:
-        print("   ⚠️  Usando conversión básica (instala pywin32 para calidad óptima)")
+        print("   Usando conversión básica (instala pywin32 para calidad óptima)")
         _build_html_basic(docx_path, html_out, tmpdir)
         converted = True
 
@@ -166,7 +166,7 @@ def build_zip_from_docx(docx_path: str, output_dir: str = None) -> str:
 
     kb    = os.path.getsize(zip_p) // 1024
     n_img = len(os.listdir(arc_dir)) if os.path.exists(arc_dir) else 0
-    print(f"   📦 index.zip ({kb} KB) — {n_img} recursos en index_archivos/")
+    print(f"   index.zip ({kb} KB) — {n_img} recursos en index_archivos/")
     return zip_p
 
 

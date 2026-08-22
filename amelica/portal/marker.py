@@ -47,12 +47,12 @@ class AmelicaMarker:
         Ejecuta el flujo completo de marcaje.
         Debe llamarse cuando la página ya está en marker.oa.
         """
-        print("\n🏷️  Iniciando marcaje automático de secciones...")
-        print(f"   🔖 Version del script: {MARKER_VERSION}")
+        print("\nIniciando marcaje automático de secciones...")
+        print(f"   Version del script: {MARKER_VERSION}")
         self.motivo_fallo = ''
 
         # ── Esperar a que la navegación a marker.oa termine ──────────
-        print("   ⏳ Esperando navegación a marker.oa...")
+        print("   Esperando navegación a marker.oa...")
         try:
             await self.page.wait_for_url('**/marker.oa**', timeout=20_000)
         except Exception:
@@ -61,7 +61,7 @@ class AmelicaMarker:
         try:
             await self.page.wait_for_load_state('networkidle', timeout=20_000)
         except Exception:
-            print("   ⚠️  networkidle no alcanzado — continuando de todas formas")
+            print("   networkidle no alcanzado — continuando de todas formas")
 
         await asyncio.sleep(2)  # Buffer extra por si el JS sigue inicializando
 
@@ -73,19 +73,19 @@ class AmelicaMarker:
             await self.page.wait_for_selector('#maskInfP', timeout=15_000)
             await self.page.wait_for_selector('#intArbol', timeout=15_000)
         except Exception:
-            print("   ⚠️  Editor de marcaje no detectado — verificá la página")
+            print("   Editor de marcaje no detectado — verifica la página")
             return self._fallar('el editor no cargó (#maskInfP/#intArbol '
                                 'ausentes tras 15s)')
 
         await asyncio.sleep(1)
 
         # Paso 1: Click en el primer textarea para cargar el artículo
-        print("   🖱️  Activando primer textarea para cargar el artículo...")
+        print("   Activando primer textarea para cargar el artículo...")
         first_textarea = await self.page.query_selector(
             '#intArbol .txtarea:not(.txtareafinArticulo)'
         )
         if not first_textarea:
-            print("   ⚠️  No se encontró el primer textarea")
+            print("   No se encontró el primer textarea")
             return self._fallar('el editor abrió sin textareas de sección')
 
         await first_textarea.click()
@@ -94,19 +94,19 @@ class AmelicaMarker:
         # con el portal lento el artículo no llegaba a tiempo y el marcaje
         # se daba por fallido teniéndolo todo bien.
         if not await self._esperar_articulo_cargado():
-            print("   ⚠️  #articuloIn sigue vacío — el artículo no cargó")
+            print("   #articuloIn sigue vacío — el artículo no cargó")
             return self._fallar(f'el artículo no cargó en #articuloIn '
                                 f'tras {self.ARTICLE_LOAD_TIMEOUT_MS // 1000}s')
 
-        print("   ✅ Artículo cargado en #articuloIn")
+        print("   Artículo cargado en #articuloIn")
 
         # Paso 2: Extraer secciones del artículo (ahora que está cargado)
         sections = await self._extract_article_sections()
         if not sections:
-            print("   ⚠️  No se detectaron secciones en el artículo")
+            print("   No se detectaron secciones en el artículo")
             return self._fallar('el artículo cargó pero sin headings que marcar')
 
-        print(f"   📋 Secciones detectadas: {len(sections)}")
+        print(f"   Secciones detectadas: {len(sections)}")
         for s in sections:
             lvl = "  " * (s['level'] - 1)
             print(f"      {lvl}{'└─' if s['level'] > 1 else '•'} {s['text'][:60]}")
@@ -115,16 +115,16 @@ class AmelicaMarker:
 
         # Paso 3: Primera sección — ya hay textarea activo y artículo cargado
         # Solo hacer click en el heading correspondiente
-        print(f"\n   📝 Marcando sección 1/{len(sections)}: {sections[0]['text'][:50]}")
+        print(f"\n   Marcando sección 1/{len(sections)}: {sections[0]['text'][:50]}")
         success = await self._click_heading_in_article(sections[0], is_first=True)
         if not success:
-            print(f"      ⚠️  No se pudo marcar la primera sección")
+            print(f"      No se pudo marcar la primera sección")
 
         await asyncio.sleep(1)
 
         # Paso 4: Secciones restantes
         for i, section in enumerate(sections[1:], start=1):
-            print(f"\n   📝 Marcando sección {i+1}/{len(sections)}: {section['text'][:50]}")
+            print(f"\n   Marcando sección {i+1}/{len(sections)}: {section['text'][:50]}")
 
             prev_level = sections[i-1]['level']
             curr_level = section['level']
@@ -137,7 +137,7 @@ class AmelicaMarker:
                 success = await self._add_and_fill_section(section)
 
             if not success:
-                print(f"      ⚠️  No se pudo marcar: {section['text'][:40]}")
+                print(f"      No se pudo marcar: {section['text'][:40]}")
 
             await asyncio.sleep(0.5)
 
@@ -155,12 +155,12 @@ class AmelicaMarker:
         # a entrar estaba todo perdido. El modo de visualizacion no puede
         # cambiar si el trabajo se guarda o no.
         if not self.auto_guardar:
-            print("\n   ✅ Marcaje completado — SIN guardar (--no-guardar).")
-            print("      Hacé click en 'Guardar' en el navegador o se pierde.")
+            print("\n   Marcaje completado — SIN guardar (--no-guardar).")
+            print("      Haz clic en 'Guardar' en el navegador o se pierde.")
             return True
 
         if not await self._click_guardar():
-            print("\n   ❌ Marcaje NO guardado.")
+            print("\n   Marcaje NO guardado.")
             print("      Las secciones se marcaron pero se pierden al salir.")
             print("      Guardalo a mano en el navegador.")
             return self._fallar('las secciones se marcaron pero el guardado no '
@@ -180,7 +180,7 @@ class AmelicaMarker:
         # click en 'Guardar' ya espera el ciclo completo del spinner de
         # JSF (_click_guardar), que es la confirmacion real de que el
         # servidor proceso el guardado.
-        print("\n   ✅ Marcaje guardado (click + indicador de guardado OK)")
+        print("\n   Marcaje guardado (click + indicador de guardado OK)")
         return True
 
     #: Cuánto esperar a que el portal cargue el artículo en #articuloIn.
@@ -193,7 +193,7 @@ class AmelicaMarker:
         lenta se reportaba como "el artículo no cargó" aunque estuviera todo
         bien. Devuelve False solo si de verdad no llegó nunca.
         """
-        print("   ⏳ Esperando que cargue el artículo en #articuloIn...")
+        print("   Esperando que cargue el artículo en #articuloIn...")
         try:
             await self.page.wait_for_function(
                 """() => {
@@ -210,7 +210,7 @@ class AmelicaMarker:
         """
         Detecta y acepta el modal del asistente de inferencias (#wlcmInferParrafos).
         """
-        print("   🔍 Verificando modal del asistente de inferencias...")
+        print("   Verificando modal del asistente de inferencias...")
 
         modal_found = False
         for _ in range(8):
@@ -226,10 +226,10 @@ class AmelicaMarker:
                 break
 
         if not modal_found:
-            print("   ℹ️  Modal del asistente no detectado — continuando")
+            print("   Modal del asistente no detectado — continuando")
             return
 
-        print("   ✅ Modal detectado — haciendo click en 'Aceptar'...")
+        print("   Modal detectado — haciendo click en 'Aceptar'...")
 
         accepted = await self.page.evaluate("""() => {
             const modal = document.getElementById('wlcmInferParrafos');
@@ -250,7 +250,7 @@ class AmelicaMarker:
         }""")
 
         if accepted:
-            print(f"   ✅ Asistente aceptado ({accepted}) — esperando editor...")
+            print(f"   Asistente aceptado ({accepted}) — esperando editor...")
             await asyncio.sleep(3)
 
             # Esperar que el modal del asistente desaparezca
@@ -263,11 +263,11 @@ class AmelicaMarker:
                     return style.display !== 'none' && style.visibility !== 'hidden';
                 }""")
                 if not still_visible:
-                    print("   ✅ Modal del asistente cerrado")
+                    print("   Modal del asistente cerrado")
                     return
-            print("   ⚠️  El modal del asistente tardó demasiado en cerrarse")
+            print("   El modal del asistente tardó demasiado en cerrarse")
         else:
-            print("   ⚠️  No se pudo hacer click en Aceptar del asistente")
+            print("   No se pudo hacer click en Aceptar del asistente")
 
     # ── Extracción de secciones ───────────────────────────────────
 
@@ -461,10 +461,10 @@ class AmelicaMarker:
 
         if selected:
             await asyncio.sleep(1.5)
-            print(f"      ✅ Texto seleccionado: '{selected[:50]}'")
+            print(f"      Texto seleccionado: '{selected[:50]}'")
         else:
             # Fallback: buscar SOLO en h1-h6 por texto y seleccionar
-            print(f"      ℹ️  Buscando por texto: '{section['text'][:40]}'")
+            print(f"      Buscando por texto: '{section['text'][:40]}'")
             selected = await self.page.evaluate("""(text) => {
                 const container = document.getElementById('articuloIn');
                 if (!container) return false;
@@ -515,10 +515,10 @@ class AmelicaMarker:
             }""")
 
         if filled:
-            print(f"      ✅ Textarea relleno: '{filled[:40]}'")
+            print(f"      Textarea relleno: '{filled[:40]}'")
             return True
         else:
-            print(f"      ⚠️  Textarea no se llenó — inyectando manualmente")
+            print(f"      Textarea no se llenó — inyectando manualmente")
             return await self._inject_text_to_last_active_textarea(section['text'], is_first=is_first)
 
     async def _inject_text_to_last_active_textarea(self, text: str, is_first: bool = False) -> bool:
@@ -602,10 +602,10 @@ class AmelicaMarker:
         }""")
 
         if not clicked:
-            print("      ⚠️  No se encontró 'Agregar Sección'")
+            print("      No se encontró 'Agregar Sección'")
             return False
 
-        print(f"      ✅ {clicked}")
+        print(f"      {clicked}")
         await asyncio.sleep(0.5)
 
         return await self._activate_textarea_and_click_heading(section)
@@ -631,10 +631,10 @@ class AmelicaMarker:
         }""")
 
         if not clicked:
-            print("      ℹ️  Sin botón subsección — agregando como sección")
+            print("      Sin botón subsección — agregando como sección")
             return await self._add_and_fill_section(section)
 
-        print(f"      ✅ {clicked}")
+        print(f"      {clicked}")
         await asyncio.sleep(0.5)
 
         return await self._activate_textarea_and_click_heading(section)
@@ -657,7 +657,7 @@ class AmelicaMarker:
         if not activated:
             return False
 
-        print(f"      🖱️  Textarea activado — esperando artículo...")
+        print(f"      Textarea activado — esperando artículo...")
         await asyncio.sleep(2.5)
 
         # Verificar que #articuloIn cargó
@@ -694,7 +694,7 @@ class AmelicaMarker:
     # ── Fin de artículo ───────────────────────────────────────────
 
     async def _fill_end_of_article(self):
-        print("\n   📍 Rellenando fin de artículo...")
+        print("\n   Rellenando fin de artículo...")
         await self._ensure_sections_panel_visible()
 
         # Click en fin textarea via JS (evita intercepción)
@@ -707,10 +707,10 @@ class AmelicaMarker:
         }""")
 
         if not activated:
-            print("   ⚠️  No se encontró el textarea de fin de artículo")
+            print("   No se encontró el textarea de fin de artículo")
             return
 
-        print("   ⏳ Esperando que cargue el artículo para fin...")
+        print("   Esperando que cargue el artículo para fin...")
         await asyncio.sleep(2.5)
 
         # Calcular las últimas 5 palabras del último párrafo de Conclusiones
@@ -791,16 +791,16 @@ class AmelicaMarker:
                     el.dispatchEvent(new Event('change', {bubbles: true}));
                 }
             }""", last_words)
-            print(f"   ✅ Fin de artículo: '{last_words}'")
+            print(f"   Fin de artículo: '{last_words}'")
         else:
-            print("   ⚠️  No se encontró párrafo final en sección de Conclusiones")
+            print("   No se encontró párrafo final en sección de Conclusiones")
 
     # ── Verificación ─────────────────────────────────────────────
 
     async def _handle_verification(self) -> bool:
         """Hace click en 'Verificar', detecta textareas amarillos y los re-marca.
         Luego hace click en 'Continuar'."""
-        print("\n   🔍 Verificando marcaje...")
+        print("\n   Verificando marcaje...")
 
         # Click en "Verificar"
         clicked = await self.page.evaluate("""() => {
@@ -815,7 +815,7 @@ class AmelicaMarker:
         }""")
 
         if not clicked:
-            print("   ℹ️  No se encontró botón 'Verificar' — continuando")
+            print("   No se encontró botón 'Verificar' — continuando")
             return True
 
         await asyncio.sleep(1.5)
@@ -839,13 +839,13 @@ class AmelicaMarker:
         }""")
 
         if not yellow_textareas:
-            print("   ✅ Verificación OK — sin textareas amarillos")
+            print("   Verificación OK — sin textareas amarillos")
         else:
-            print(f"   ⚠️  {len(yellow_textareas)} textarea(s) amarillo(s) — re-marcando...")
+            print(f"   {len(yellow_textareas)} textarea(s) amarillo(s) — re-marcando...")
             for item in yellow_textareas:
                 idx = item['index']
                 val = item['value']
-                print(f"      🔄 Re-marcando textarea {idx}: '{val[:40]}'")
+                print(f"      Re-marcando textarea {idx}: '{val[:40]}'")
 
                 # Click en el textarea amarillo via JS
                 await self.page.evaluate(f"""() => {{
@@ -897,9 +897,9 @@ class AmelicaMarker:
 
                 await asyncio.sleep(1.5)
                 if re_selected:
-                    print(f"      ✅ Re-marcado: '{re_selected[:40]}'")
+                    print(f"      Re-marcado: '{re_selected[:40]}'")
                 else:
-                    print(f"      ⚠️  No se pudo re-marcar: '{val[:40]}'")
+                    print(f"      No se pudo re-marcar: '{val[:40]}'")
 
         # Click en "Continuar"
         await asyncio.sleep(0.5)
@@ -915,10 +915,10 @@ class AmelicaMarker:
         }""")
 
         if continued:
-            print("   ✅ Click en 'Continuar'")
+            print("   Click en 'Continuar'")
             await asyncio.sleep(2)
         else:
-            print("   ℹ️  No se encontró 'Continuar' — puede que no sea necesario")
+            print("   No se encontró 'Continuar' — puede que no sea necesario")
 
         return True
 
@@ -938,7 +938,7 @@ class AmelicaMarker:
         el marcaje se perdía. Devuelve True solo si encontró y clickeó el
         botón; quien llama necesita saberlo.
         """
-        print("\n   💾 Guardando el marcaje...")
+        print("\n   Guardando el marcaje...")
 
         clicked = await self.page.evaluate(r"""(saveId) => {
             const el = document.getElementById(saveId);
@@ -953,9 +953,9 @@ class AmelicaMarker:
         }""", self.SAVE_BUTTON_ID)
 
         if not clicked:
-            print("   ⚠️  No se encontró el botón 'Guardar'")
+            print("   No se encontró el botón 'Guardar'")
             return False
-        print(f"   ✅ Click en 'Guardar' ({clicked})")
+        print(f"   Click en 'Guardar' ({clicked})")
 
         # Esperar a que el spinner de JSF aparezca y vuelva a ocultarse: si
         # cerramos antes, el guardado queda a medias y se pierde el trabajo.
@@ -967,7 +967,7 @@ class AmelicaMarker:
                     return !w || w.offsetParent === null;
                 }""", arg=self.WAIT_SPINNER_ID, timeout=90_000)
         except Exception:
-            print("   ⚠️  El indicador de guardado no terminó en 90s")
+            print("   El indicador de guardado no terminó en 90s")
             return False
 
         try:
@@ -1006,7 +1006,7 @@ class AmelicaMarker:
             # por que -- confirmado en vivo con un articulo real (1393).
             cuerpo = (await self.page.evaluate("() => document.body ? document.body.innerText : ''") or "")
             if re.search(r'\b403\b|forbidden|prohibido|acceso denegado', cuerpo, re.IGNORECASE):
-                print(f"   ⚠️  El reload de verificación devolvió una página de error "
+                print(f"   El reload de verificación devolvió una página de error "
                       f"(texto sospechoso: {cuerpo.strip()[:80]!r}) en vez del editor.")
                 print(f"      URL antes del reload: {url_antes}")
                 print("      Reintentando con una navegación nueva en vez de reload()...")
@@ -1038,7 +1038,7 @@ class AmelicaMarker:
                 return None
             return len(secciones) > 0
         except Exception as e:
-            print(f"   ℹ️  No se pudo verificar la persistencia: {e}")
+            print(f"   No se pudo verificar la persistencia: {e}")
             return None
 
     async def _click_inferir(self) -> bool:
@@ -1046,7 +1046,7 @@ class AmelicaMarker:
         marcaje). Se conserva por si hace falta, pero NO es lo que guarda:
         para eso está _click_guardar().
         """
-        print("\n   🚀 Haciendo click en 'Inferir'...")
+        print("\n   Haciendo click en 'Inferir'...")
 
         await self._ensure_sections_panel_visible()
 
@@ -1066,9 +1066,9 @@ class AmelicaMarker:
         }""")
 
         if clicked:
-            print(f"   ✅ Click en 'Inferir' ({clicked})")
+            print(f"   Click en 'Inferir' ({clicked})")
             await asyncio.sleep(3)
             return True
 
-        print("   ⚠️  No se encontró el botón 'Inferir'")
+        print("   No se encontró el botón 'Inferir'")
         return False

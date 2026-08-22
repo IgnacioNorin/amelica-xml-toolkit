@@ -49,6 +49,16 @@ corrio el flujo completo end-to-end). El parser que alimenta esto
 con --referencias sobre un numero de prueba, o repetir la grabacion con
 tools/grabador_referencias.js (pegar en la consola del navegador mientras
 se completa una referencia a mano en el portal).
+
+Orden de campos en _fill_single_reference confirmado por el usuario
+2026-08-21 comparando contra el orden real del portal en su estado limpio
+(ver tools/probar_referencia.js -- funcion limpiarReferencias -- y
+tools/grabar_estado_referencia_limpia.js):
+Referencia completa -> Referencia detallada (tipo) -> Autores -> Año ->
+Fuente -> Volumen -> Numero -> Pagina inicial -> Pagina final -> Titulo
+del articulo (SOLO journal, no confproc) -> DOI/URL (siempre al final,
+para todos los tipos). El orden anterior ponia Titulo del articulo antes
+de Volumen -- al reves de como lo pide el portal.
 """
 
 import asyncio
@@ -70,7 +80,7 @@ class ReferencesMixin:
             return false;
         }""")
         if closed1:
-            print("   ✅ Modal alerta cerrado")
+            print("   Modal alerta cerrado")
             await asyncio.sleep(1)
 
         # Modal 2: asistente de inferencia → Cancelar
@@ -86,7 +96,7 @@ class ReferencesMixin:
             return false;
         }""")
         if closed2:
-            print("   ✅ Modal asistente cerrado")
+            print("   Modal asistente cerrado")
             await asyncio.sleep(1)
 
         # Modal 3: jQuery UI dialog warning
@@ -101,7 +111,7 @@ class ReferencesMixin:
             return false;
         }""")
         if closed3:
-            print("   ✅ Modal warning cerrado")
+            print("   Modal warning cerrado")
             await asyncio.sleep(1)
 
     async def _delete_refs_but_one(self) -> int:
@@ -121,7 +131,7 @@ class ReferencesMixin:
             return count;
         }""")
         if deleted:
-            print(f"   🗑️  Borradas {deleted} referencias pre-existentes")
+            print(f"   Borradas {deleted} referencias pre-existentes")
             await asyncio.sleep(0.5)
         return deleted
 
@@ -199,7 +209,7 @@ class ReferencesMixin:
         }""", [title_attr, nth, text])
 
         if result != 'ok':
-            print(f"      ⚠️  _fill_ref_contenido ({result}): '{title_attr}'")
+            print(f"      _fill_ref_contenido ({result}): '{title_attr}'")
             return False
         return True
 
@@ -244,12 +254,12 @@ class ReferencesMixin:
         }""", year)
 
         if result == 'not-found':
-            print(f"      ⚠️  Select de Año no encontrado")
+            print(f"      Select de Año no encontrado")
             return False
         if result == 'no-match':
-            print(f"      ⚠️  Año '{year}' no está entre las opciones del select")
+            print(f"      Año '{year}' no está entre las opciones del select")
             return False
-        print(f"      ✅ Año: {year} ({result})")
+        print(f"      Año: {year} ({result})")
         return True
 
     async def _add_ref_authors(self, authors: list) -> bool:
@@ -280,7 +290,7 @@ class ReferencesMixin:
                 await self._click_caja('Autores')
                 clicked = await self._click_menu_button('Autor institucional')
                 if not clicked:
-                    print(f"      ⚠️  No se pudo crear autor institucional")
+                    print(f"      No se pudo crear autor institucional")
                     continue
                 await asyncio.sleep(0.4)
                 await self._fill_ref_contenido('Institución', surname, nth='last')
@@ -291,7 +301,7 @@ class ReferencesMixin:
                 await self._click_caja('Autores')
                 clicked = await self._click_menu_button('Autor')
                 if not clicked:
-                    print(f"      ⚠️  No se pudo crear autor")
+                    print(f"      No se pudo crear autor")
                     continue
                 await asyncio.sleep(0.4)
             personal_added = True
@@ -329,7 +339,7 @@ class ReferencesMixin:
         # 3. Seleccionar tipo de publicación (el select ya existe)
         ok = await self._set_ref_pub_type(pub_type)
         if not ok:
-            print(f"      ⚠️  No se pudo setear pub_type={pub_type}")
+            print(f"      No se pudo setear pub_type={pub_type}")
 
         # 3b. Reactivar la caja, ahora con su titulo especifico de tipo
         #     (- JOURNAL, - BOOK, etc.) para revelar los botones de menu
@@ -352,14 +362,6 @@ class ReferencesMixin:
 
         # 7. Campos adicionales según tipo
         if pub_type in ('journal', 'confproc'):
-            # Título del artículo
-            article_title = ref.get('article_title', '')
-            if article_title:
-                await self._click_caja(det_title)
-                if await self._click_menu_button('Título del artículo'):
-                    await asyncio.sleep(0.3)
-                    await self._fill_ref_contenido('Título del artículo', article_title)
-
             # Volumen
             volume = ref.get('volume', '')
             if volume:
@@ -398,6 +400,19 @@ class ReferencesMixin:
                     await asyncio.sleep(0.3)
                     await self._fill_ref_contenido('Paginación electrónica', elocation)
 
+        # Título del artículo: SOLO para revista (journal), NO para actas de
+        # conferencia (confproc) -- confirmado por el usuario 2026-08-21
+        # comparando contra el orden real de campos del portal. Va DESPUÉS
+        # de Volumen/Número/Página inicial/Página final, no antes: el orden
+        # anterior lo ponía primero (al revés de como lo pide el portal).
+        if pub_type == 'journal':
+            article_title = ref.get('article_title', '')
+            if article_title:
+                await self._click_caja(det_title)
+                if await self._click_menu_button('Título del artículo'):
+                    await asyncio.sleep(0.3)
+                    await self._fill_ref_contenido('Título del artículo', article_title)
+
         # DOI / URL (todos los tipos) -- son dos campos distintos en el
         # portal, confirmados en vivo (2026-08-21): "Identificador de la
         # publicación" (con su propio select DOI/Identificador de acceso/
@@ -432,16 +447,42 @@ class ReferencesMixin:
 
     async def _click_ref_close(self) -> bool:
         """Clickea el boton 'Cerrar' (title="Cerrar", class="close-...")
-        mas reciente visible, para colapsar la caja de referencia activa."""
+        de la caja "Referencia" activa, para colapsarla.
+
+        "Cerrar" es AMBIGUO en el portal: el mismo title= se usa tambien
+        para BORRAR sub-items (Autores, Institucion, etc.), no solo para
+        colapsar el panel de detalle de la referencia. Confirmado en vivo
+        (2026-08-21, con tools/probar_referencia.js): tomar "el ultimo
+        Cerrar visible" a ciegas podia agarrar el de la caja "Autores" en
+        vez del de "Referencia" y borraba TODO ese grupo de autores (el
+        caso reportado: referencia con autor institucional que, tras
+        llenarse bien, terminaba con el grupo de autores borrado y solo
+        Año/Fuente visibles). El fix: restringirse al Cerrar cuyo
+        contenedor [title=...] mas cercano es exactamente "Referencia"."""
         clicked = await self.page.evaluate("""() => {
             const all = [...document.querySelectorAll('[title="Cerrar"]')]
                 .filter(el => el.offsetParent !== null);
             if (!all.length) return false;
-            all[all.length - 1].click();
+
+            const contenedorDe = (el) => {
+                let nodo = el.parentElement;
+                while (nodo) {
+                    const t = nodo.getAttribute && nodo.getAttribute('title');
+                    if (t) return t;
+                    nodo = nodo.parentElement;
+                }
+                return null;
+            };
+
+            const candidatos = all.filter(el => contenedorDe(el) === 'Referencia');
+            if (!candidatos.length) return false;
+            candidatos[candidatos.length - 1].click();
             return true;
         }""")
         if clicked:
             await asyncio.sleep(0.3)
+        else:
+            print('   No se encontró el botón "Cerrar" de la caja "Referencia"')
         return clicked
 
     async def fill_references(self, refs: list) -> bool:
@@ -450,12 +491,12 @@ class ReferencesMixin:
         refs: lista devuelta por parse_references_from_html().
         """
         if not refs:
-            print("   ℹ️  Sin referencias para completar")
+            print("   Sin referencias para completar")
             return True
 
         print("\n" + "─"*55)
-        print(f"📚 Completando Referencias ({len(refs)} refs)...")
-        print("⚠️  EXPERIMENTAL — este paso borra las referencias que el")
+        print(f"Completando Referencias ({len(refs)} refs)...")
+        print("EXPERIMENTAL — este paso borra las referencias que el")
         print("   artículo ya tenga cargadas en el portal antes de escribir.")
         print("─"*55)
 
@@ -473,13 +514,13 @@ class ReferencesMixin:
         # 4. Llenar cada referencia
         for i, ref in enumerate(refs):
             surname = ref['authors'][0]['surname'] if ref['authors'] else '(inst.)'
-            print(f"\n   📖 [{i+1}/{len(refs)}] {surname} ({ref['year']}) [{ref['pub_type']}]")
+            print(f"\n   [{i+1}/{len(refs)}] {surname} ({ref['year']}) [{ref['pub_type']}]")
 
             if i > 0:
                 # Crear nueva referencia con botón
                 await self._click_caja('Referencias')
                 if not await self._click_menu_button('Referencia'):
-                    print(f"      ⚠️  No se pudo crear la referencia {i+1}")
+                    print(f"      No se pudo crear la referencia {i+1}")
                     continue
                 await asyncio.sleep(0.5)
 
@@ -487,7 +528,7 @@ class ReferencesMixin:
             await asyncio.sleep(0.3)
 
         # 5. Guardar
-        print("\n   💾 Guardando referencias...")
+        print("\n   Guardando referencias...")
         saved = await self.page.evaluate("""() => {
             // Buscar botón Guardar visible
             // Nota: nada de selectores tipo :contains() -- eso es jQuery y
@@ -511,8 +552,8 @@ class ReferencesMixin:
         }""")
 
         if saved:
-            print("   ✅ Referencias guardadas")
+            print("   Referencias guardadas")
         else:
-            print("   ⚠️  No se encontró botón Guardar — guardá manualmente")
+            print("   No se encontró botón Guardar — guarda manualmente")
 
         return True

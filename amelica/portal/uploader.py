@@ -73,8 +73,19 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
     def _step(self, name: str, ok: bool, detail: str = '') -> bool:
         """Registra el resultado de una etapa y lo devuelve, para poder
-        escribir `if not self._step('zip', await self.upload_zip(...)):`."""
+        escribir `if not self._step('zip', await self.upload_zip(...)):`.
+
+        Además imprime una línea con un formato fijo y parseable
+        (`##ETAPA## nombre|ok/fail|detalle`) mezclada en la salida normal.
+        No cambia nada de lo que ya se imprime -- es una línea más -- pero
+        le permite a un consumidor externo (la webapp local,
+        amelica/idml/webapp.py) armar una vista de progreso por etapa en
+        vivo en lugar de mostrar solo el texto crudo del log. El detalle
+        se sanitiza de '|' y saltos de línea para no romper el formato de
+        una sola línea."""
         self.steps[name] = (ok, detail)
+        detalle_plano = detail.replace('|', '/').replace('\n', ' ').strip()
+        print(f"##ETAPA## {name}|{'ok' if ok else 'fail'}|{detalle_plano}")
         return ok
 
     def _confirmar_zip_por_marcaje(self, marcaje_ok: bool) -> None:
@@ -111,22 +122,22 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             'references':   'Referencias',
         }
         print("\n" + "═"*55)
-        print("📊 RESULTADO POR ETAPA")
+        print("RESULTADO POR ETAPA")
         print("═"*55)
         for clave, etiqueta in etiquetas.items():
             if clave not in self.steps:
                 continue
             ok, detail = self.steps[clave]
-            print(f"   {'✅' if ok else '❌'} {etiqueta:24s}{' — ' + detail if detail else ''}")
+            print(f"   {'OK' if ok else 'FALLO':5s} {etiqueta:24s}{' — ' + detail if detail else ''}")
 
         fallidas = [k for k, (ok, _) in self.steps.items() if not ok]
         if not fallidas:
-            print("\n🎉 Proceso completado — todas las etapas OK")
+            print("\nProceso completado — todas las etapas OK")
         elif any(k in self.CRITICAL_STEPS for k in fallidas):
-            print("\n💥 El proceso FALLÓ en una etapa crítica.")
+            print("\nEl proceso FALLÓ en una etapa crítica.")
         else:
-            print("\n⚠️  Artículo creado pero INCOMPLETO — terminá a mano las")
-            print("   etapas marcadas con ❌ en el navegador.")
+            print("\nArtículo creado pero INCOMPLETO — completa a mano las")
+            print("   etapas marcadas como FALLO en el navegador.")
         print("═"*55)
 
     # ── Ciclo de vida ────────────────────────────────────────────
@@ -149,13 +160,13 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
     # ── Login ────────────────────────────────────────────────────
 
     async def login(self) -> bool:
-        print("🔐 Iniciando sesión...")
+        print("Iniciando sesión...")
         await self.page.goto(PORTAL_URL, wait_until='networkidle')
 
         try:
             await self.page.wait_for_selector('input[type="password"]', timeout=10_000)
         except PlaywrightTimeout:
-            print("❌ Formulario de login no encontrado")
+            print("Formulario de login no encontrado")
             await self._ss("debug_login"); return False
 
         user = await self.page.query_selector(
@@ -169,7 +180,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         pwd = await self.page.query_selector('input[type="password"]')
 
         if not user or not pwd:
-            print("❌ Campos de login no encontrados")
+            print("Campos de login no encontrados")
             await self._ss("debug_no_fields"); return False
 
         await user.fill(self.email)
@@ -197,35 +208,35 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         print(f"   URL actual: {current_url}")
 
         if 'issue.oa' in current_url or 'home.oa' in current_url or 'journal' in current_url:
-            print("✅ Login exitoso"); return True
+            print("Login exitoso"); return True
 
         try:
             content = await self.page.content()
             if any(w in content for w in ['Bienvenido', 'Revista', 'Editor', 'Números']):
-                print("✅ Login exitoso"); return True
+                print("Login exitoso"); return True
         except Exception:
             pass
 
         if current_url == PORTAL_URL or 'issue.oa' not in current_url:
-            print(f"❌ Login fallido. URL: {current_url}")
+            print(f"Login fallido. URL: {current_url}")
             try:
                 await self._ss("debug_login_fail")
             except Exception:
                 pass
             return False
 
-        print("✅ Login exitoso (redirigido)"); return True
+        print("Login exitoso (redirigido)"); return True
 
     # ── Selección interactiva de número ─────────────────────────
 
     async def pick_issue_interactive(self, target_volume: str | None = None) -> bool:
-        print("\n🔍 Detectando números En proceso...")
+        print("\nDetectando números En proceso...")
         await asyncio.sleep(1.5)
 
         issues = await self._get_inprocess_issues()
 
         if not issues:
-            print("⚠️  No se detectaron números En proceso.")
+            print("No se detectaron números En proceso.")
             await self._ss("debug_no_issues"); return False
 
         # Si se paso un volumen objetivo (desde credentials.json), buscar el
@@ -235,13 +246,13 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             for iss in issues:
                 norm_label = re.sub(r"\s+", " ", iss["label"].strip())
                 if norm_label == norm_target:
-                    print(f"\n🔧 Volumen preconfigurado encontrado: '{iss['label']}' (desde credentials.json)")
+                    print(f"\nVolumen preconfigurado encontrado: '{iss['label']}' (desde credentials.json)")
                     await self._click_gear(iss)
                     heading = await self.page.query_selector('h1, h2, h3')
                     if heading:
                         print(f"   Página: {(await heading.inner_text()).strip()}")
-                    print("✅ Número seleccionado"); return True
-            print(f"⚠️  No se encontró un volumen 'En proceso' que coincida con "
+                    print("Número seleccionado"); return True
+            print(f"No se encontró un volumen 'En proceso' que coincida con "
                   f"'{target_volume}' — se pide elegir manualmente.")
 
         print()
@@ -270,7 +281,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 print("\nCancelado."); return False
 
         selected = issues[idx]
-        print(f"\n🔧 Abriendo: {selected['label'].strip()}")
+        print(f"\nAbriendo: {selected['label'].strip()}")
         await self._click_gear(selected)
 
         heading = await self.page.query_selector('h1, h2, h3')
@@ -281,10 +292,10 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             'button:has-text("Agregar"), a:has-text("Agregar")'
         )
         if not agregar:
-            print("⚠️  No se detectó botón 'Agregar artículo'")
+            print("No se detectó botón 'Agregar artículo'")
             await self._ss("debug_after_gear_click")
 
-        print("✅ Número seleccionado"); return True
+        print("Número seleccionado"); return True
 
     async def _get_inprocess_issues(self) -> list[dict]:
         link_ids = await self.page.evaluate("""
@@ -326,7 +337,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 "link_id":  link_id,
             })
 
-        print(f"   ✅ {len(issues)} números En proceso detectados")
+        print(f"   {len(issues)} números En proceso detectados")
         return issues
 
     async def _click_gear(self, issue: dict) -> bool:
@@ -338,10 +349,10 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             link_id
         )
         if not clicked:
-            print(f"❌ No se encontró elemento id={link_id}")
+            print(f"No se encontró elemento id={link_id}")
             await self._ss("debug_gear_lost"); return False
 
-        print("   ✅ Click ejecutado")
+        print("   Click ejecutado")
         await asyncio.sleep(2)
         await self.page.wait_for_load_state("networkidle")
         await asyncio.sleep(1)
@@ -449,7 +460,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         return sum(1 for b in bloques if needle in b['titulo'].lower())
 
     async def add_article(self, data: dict) -> bool:
-        print("\n📝 Abriendo formulario 'Nuevo artículo'...")
+        print("\nAbriendo formulario 'Nuevo artículo'...")
 
         # Foto ANTES de crear nada: es lo que después permite saber cuál de
         # los artículos del listado es el nuestro.
@@ -457,7 +468,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         ya_existian = self._titulos_coincidentes(
             self._blocks_before, data.get('title', ''))
         if ya_existian:
-            print(f"   ⚠️  Ojo: ya hay {ya_existian} artículo(s) con ese título en el número.")
+            print(f"   Ojo: ya hay {ya_existian} artículo(s) con ese título en el número.")
             print("      Se va a crear igual, pero el editor solo se abrirá si")
             print("      se puede identificar sin ambigüedad cuál es el nuevo.")
 
@@ -477,7 +488,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                 if 'agregar' in txt and 'art' in txt:
                     btn = b; break
         if not btn:
-            print("❌ No se encontró 'Agregar artículo'")
+            print("No se encontró 'Agregar artículo'")
             await self._ss("debug_no_agregar"); return False
 
         await btn.click()
@@ -489,7 +500,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             await asyncio.sleep(1.5)
 
         self._last_article_title = data.get('title', '')
-        print(f"   📌 Título: {data['title'][:60]}")
+        print(f"   Título: {data['title'][:60]}")
 
         fill_result = await self.page.evaluate("""(d) => {
             function getFirst(ids) {
@@ -532,9 +543,9 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
         failed = [k for k, v in fill_result.items() if v is False]
         if failed:
-            print(f"   ⚠️  No se pudieron completar estos campos (ID no encontrado en la pagina): {', '.join(failed)}")
+            print(f"   No se pudieron completar estos campos (ID no encontrado en la pagina): {', '.join(failed)}")
         else:
-            print(f"   ✅ Campos rellenados — páginas: {data.get('page_start','?')}–{data.get('page_end','?')}, citación: {data.get('citation','APA')}")
+            print(f"   Campos rellenados — páginas: {data.get('page_start','?')}–{data.get('page_end','?')}, citación: {data.get('citation','APA')}")
         await asyncio.sleep(0.5)
 
         clicked = await self.page.evaluate("""() => {
@@ -550,16 +561,16 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             if not crear:
                 crear = await self.page.query_selector('button:has-text("Actualizar")')
             if not crear:
-                print("❌ Botón 'Crear'/'Actualizar' no encontrado")
+                print("Botón 'Crear'/'Actualizar' no encontrado")
                 await self._ss("debug_no_crear"); return False
             await crear.click()
 
-        print("   ✅ Click en 'Crear'/'Actualizar'")
+        print("   Click en 'Crear'/'Actualizar'")
         await asyncio.sleep(2.5)
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(1)
 
-        print("   🔍 Abriendo panel de subida HTML...")
+        print("   Abriendo panel de subida HTML...")
         await asyncio.sleep(1)
 
         opened = await self.page.evaluate("""() => {
@@ -581,7 +592,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         }""")
 
         if opened:
-            print(f"   ✅ Panel HTML abierto ({opened})")
+            print(f"   Panel HTML abierto ({opened})")
             await self.page.evaluate("""() => {
                 try {
                     const a = document.getElementById('form-articulo:j_idt552');
@@ -590,7 +601,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             }""")
             await asyncio.sleep(2)
         else:
-            print("   ⚠️  No se pudo abrir panel HTML — súbelo manualmente")
+            print("   No se pudo abrir panel HTML — súbelo manualmente")
 
         return True
 
@@ -663,7 +674,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                     return !el || el.offsetParent === null;
                 }""", arg=panel_id, timeout=self.MODAL_CLOSE_TIMEOUT_MS)
         except PlaywrightTimeout:
-            print(f"   ⚠️  El modal {nombre} sigue visible tras "
+            print(f"   El modal {nombre} sigue visible tras "
                   f"{self.MODAL_CLOSE_TIMEOUT_MS // 1000}s — probando Escape...")
             try:
                 await self.page.keyboard.press('Escape')
@@ -673,10 +684,10 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                         return !el || el.offsetParent === null;
                     }""", arg=panel_id, timeout=5_000)
             except Exception:
-                print(f"   ⚠️  El modal {nombre} no se cerró — el click en "
+                print(f"   El modal {nombre} no se cerró — el click en "
                       f"'Marcar' puede no llegar al listado")
                 return False
-        print(f"   ✅ Modal {nombre} cerrado")
+        print(f"   Modal {nombre} cerrado")
         # El listado se repinta por AJAX después de cerrar el modal.
         try:
             await self.page.wait_for_load_state('networkidle', timeout=15_000)
@@ -688,7 +699,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
     # ── Subir ZIP ────────────────────────────────────────────────
 
     async def upload_zip(self, zip_path: str) -> bool:
-        print(f"\n📤 Subiendo ZIP ({Path(zip_path).stat().st_size // 1024} KB)...")
+        print(f"\nSubiendo ZIP ({Path(zip_path).stat().st_size // 1024} KB)...")
 
         upload_frame = None
         for attempt in range(15):
@@ -699,22 +710,22 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                     break
             if upload_frame:
                 break
-            print(f"   ⏳ Esperando iframe de subida... ({attempt+1}/15)")
+            print(f"   Esperando iframe de subida... ({attempt+1}/15)")
 
         if not upload_frame:
-            print("⚠️  No se encontró el iframe — usando página principal")
+            print("No se encontró el iframe — usando página principal")
             upload_frame = self.page
 
         try:
             await upload_frame.wait_for_selector('input[type="file"]', timeout=10_000)
         except PlaywrightTimeout:
-            print("❌ No apareció el input de archivo")
+            print("No apareció el input de archivo")
             await self._ss("debug_no_zip_input")
             return False
 
         file_input = await upload_frame.query_selector('input[type="file"]')
         if not file_input:
-            print("❌ No se encontró input[type=file]")
+            print("No se encontró input[type=file]")
             await self._ss("debug_no_file_input")
             return False
 
@@ -723,12 +734,12 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
         async def _seleccionar_y_confirmar():
             await file_input.set_input_files(str(zip_path))
-            print("   ✅ ZIP seleccionado")
+            print("   ZIP seleccionado")
             for sel in confirm_selectors:
                 confirm = await upload_frame.query_selector(sel)
                 if confirm:
                     await confirm.click()
-                    print("   ✅ Confirmación enviada")
+                    print("   Confirmación enviada")
                     break
 
         # El widget de PrimeFaces sube el archivo apenas se elige (auto:true
@@ -740,7 +751,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # (efimero) o el mostrar1 (a veces no llegaba a verse) aparezcan, que
         # es lo que se hacia antes y a veces daba falso "sin confirmación"
         # aunque el ZIP hubiera entrado bien.
-        print("   ⏳ Subiendo y esperando respuesta del servidor...")
+        print("   Subiendo y esperando respuesta del servidor...")
         try:
             async with self.page.expect_response(
                 lambda r: "upload.oa" in r.url and r.request.method == "POST",
@@ -748,22 +759,22 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             ) as response_info:
                 await _seleccionar_y_confirmar()
         except PlaywrightTimeout:
-            print("   ⚠️  El servidor no respondió al POST de upload.oa a tiempo")
+            print("   El servidor no respondió al POST de upload.oa a tiempo")
             self._step('zip', True, 'sin respuesta del servidor (se verificó por el editor)')
             self._zip_sin_confirmar = True
         else:
             response = await response_info.value
             body = await response.text()
             if re.search(r'ha sido aceptado', body, re.IGNORECASE):
-                print("   ✅ ZIP aceptado (confirmado por la respuesta del servidor)")
+                print("   ZIP aceptado (confirmado por la respuesta del servidor)")
                 self._step('zip', True)
             else:
-                print(f"   ⚠️  Respuesta del servidor sin confirmación de aceptación: {body[:200]}")
+                print(f"   Respuesta del servidor sin confirmación de aceptación: {body[:200]}")
                 self._step('zip', True, 'respuesta del servidor sin confirmación explícita (se verificó por el editor)')
                 self._zip_sin_confirmar = True
 
         # Cerrar modal ZIP
-        print("   🔒 Cerrando modal ZIP (click en X)...")
+        print("   Cerrando modal ZIP (click en X)...")
         await self.page.evaluate("""() => {
             const header = document.querySelector('#p-html_header, #panel-html .ui-panel-titlebar');
             if (header) {
@@ -779,7 +790,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         await self._esperar_modal_cerrado('panel-html', 'ZIP')
 
         # Cerrar modal artículo
-        print("   🔒 Cerrando modal artículo (click en X)...")
+        print("   Cerrando modal artículo (click en X)...")
         await self.page.evaluate("""() => {
             const header = document.querySelector('#p-articulo_header, #panel-articulo .ui-panel-titlebar');
             if (header) {
@@ -801,7 +812,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # mismo nombre, la búsqueda por texto abría el viejo y el front
         # matter lo sobrescribía (llegó a borrar autores reales).
         titulo = self._last_article_title or ''
-        print(f"\n   🎯 Identificando el artículo recién creado...")
+        print(f"\n   Identificando el artículo recién creado...")
 
         # El listado de artículos (div.articulo) NO se repinta solo tras
         # crear uno: comprobado en vivo el 2026-08-18 — 60+ segundos después
@@ -810,39 +821,39 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         # reload, "despues" salía igual a "antes" y el resultado era
         # siempre 0 bloques nuevos: ambiguo con homónimos, o el título
         # entero sin match sin ellos.
-        print("   🔄 Recargando la página para refrescar el listado...")
+        print("   Recargando la página para refrescar el listado...")
         try:
             await self.page.reload(wait_until='networkidle', timeout=30_000)
             await asyncio.sleep(1)
         except Exception as e:
-            print(f"   ⚠️  No se pudo recargar el listado: {e}")
+            print(f"   No se pudo recargar el listado: {e}")
 
         antes    = getattr(self, '_blocks_before', [])
         despues  = await self._snapshot_article_blocks()
         estrategia, dato = self.decidir_articulo_a_marcar(antes, despues, titulo)
 
         if estrategia == 'clave':
-            print(f"   ✅ Identificado sin ambigüedad por clave del bloque")
+            print(f"   Identificado sin ambigüedad por clave del bloque")
             marcar_clicked = await self._click_marcar_por_clave(dato)
 
         elif estrategia == 'titulo':
-            print("   ℹ️  Sin claves estables, pero el título no existía antes")
+            print("   Sin claves estables, pero el título no existía antes")
             marcar_clicked = await self._click_marcar_por_titulo(titulo)
 
         else:
-            print("\n   🛑 ABORTADO: no se puede identificar el artículo nuevo.")
+            print("\n   ABORTADO: no se puede identificar el artículo nuevo.")
             print(f"      Motivo: {dato}")
-            print("      Abrir el editor acá podría sobrescribir un artículo ya")
+            print("      Abrir el editor aquí podría sobrescribir un artículo ya")
             print("      publicado, así que no se toca nada. El artículo quedó")
-            print("      creado: abrí 'Marcar' a mano sobre el correcto.")
+            print("      creado: abre 'Marcar' a mano sobre el correcto.")
             self._step('marcar', False, f'ambiguo ({dato}) — no se abrió el editor')
             self._confirmar_zip_por_marcaje(False)
             return True
 
         if not marcar_clicked:
-            print("   ⚠️  No se encontró el botón 'Marcar' — revisá el artículo manualmente")
+            print("   No se encontró el botón 'Marcar' — revisa el artículo manualmente")
             diag = await self._snapshot_article_blocks()
-            print(f"   🔍 DIAGNÓSTICO — bloques en el listado ahora ({len(diag)}):")
+            print(f"   DIAGNÓSTICO — bloques en el listado ahora ({len(diag)}):")
             for b in diag:
                 print(f"      titulo={b['titulo'][:60]!r} clave={b['clave']!r}")
             await self._ss("debug_no_marcar")
@@ -851,14 +862,14 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             return True
 
         self._step('marcar', True)
-        print(f"   ✅ Click en 'Marcar'")
+        print(f"   Click en 'Marcar'")
         await asyncio.sleep(2)
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(1)
 
         # ── NUEVO: Marcaje automático de secciones ──────────────────
         print("\n" + "─"*55)
-        print("🏷️  Iniciando marcaje automático de secciones...")
+        print("Iniciando marcaje automático de secciones...")
         print("─"*55)
         marker = AmelicaMarker(self.page, headless=self.headless,
                                auto_guardar=self.auto_guardar)
@@ -871,9 +882,9 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
                                       or 'el editor de marcaje no respondió'))
         self._confirmar_zip_por_marcaje(bool(marked))
         if marked:
-            print("\n🎉 ¡Artículo marcado exitosamente!")
+            print("\n¡Artículo marcado exitosamente!")
         else:
-            print("\n⚠️  Marcaje no completado — revisá manualmente el editor")
+            print("\nMarcaje no completado — revisa manualmente el editor")
 
         # ── NUEVO: Completar "Datos del artículo" (titulos/autores/etc) ──
         try:
@@ -882,8 +893,8 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             self._step('front_matter', bool(ok_fm),
                        '' if ok_fm else 'quedó incompleto')
         except Exception as e:
-            print(f"\n⚠️  No se pudo completar 'Datos del artículo' automáticamente: {e}")
-            print("   Completalo manualmente en el navegador.")
+            print(f"\nNo se pudo completar 'Datos del artículo' automáticamente: {e}")
+            print("   Complétalo manualmente en el navegador.")
             self._step('front_matter', False, f'{type(e).__name__}: {e}')
 
         # ── Referencias: solo si se pidio explicitamente ──────────────────
@@ -896,20 +907,20 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         try:
             refs = self._parse_refs_from_zip(zip_path)
             if not refs:
-                print("\n   ℹ️  No se encontraron referencias en el HTML")
+                print("\n   No se encontraron referencias en el HTML")
             elif self.fill_refs:
                 ok_refs = await self.fill_references(refs)
                 self._step('references', bool(ok_refs))
             else:
-                print(f"\n   📚 {len(refs)} referencias detectadas en el HTML.")
-                print("      Cargalas a mano, o probá --referencias (experimental).")
+                print(f"\n   {len(refs)} referencias detectadas en el HTML.")
+                print("      Cárgalas a mano, o prueba --referencias (experimental).")
                 # No es un fallo: es el comportamiento pedido. Se registra
                 # como pendiente para que aparezca en el resumen.
                 self._step('references', True,
                            f'{len(refs)} detectadas, a cargar a mano (sin --referencias)')
         except Exception as e:
-            print(f"\n⚠️  No se pudieron procesar las referencias: {e}")
-            print("   Completá las referencias manualmente en el navegador.")
+            print(f"\nNo se pudieron procesar las referencias: {e}")
+            print("   Completa las referencias manualmente en el navegador.")
             self._step('references', False, f'{type(e).__name__}: {e}')
 
         return True
@@ -930,7 +941,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
         try:
             path = f"{name}_{int(time.time())}.png"
             await self.page.screenshot(path=path, full_page=True)
-            print(f"   📸 {path}")
+            print(f"   {path}")
         except Exception:
             pass  # No romper el flujo si la página está cerrada
 
@@ -939,11 +950,11 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
     async def run(self, input_path: str, article_data: dict | None = None, keep_zip: str | None = None, target_volume: str | None = None) -> bool:
         input_path = Path(input_path)
         if not input_path.exists():
-            print(f"❌ Archivo no encontrado: {input_path}"); return False
+            print(f"Archivo no encontrado: {input_path}"); return False
 
         # Aceptar tanto .docx como .zip directamente
         if input_path.suffix.lower() == '.zip':
-            print(f"   📂 ZIP recibido — aplicando correcciones AmeliCA...")
+            print(f"   ZIP recibido — aplicando correcciones AmeliCA...")
             zip_path = fix_zip_for_amelica(str(input_path))
             if article_data is None:
                 # Antes: placeholders fijos. Ahora: se extraen los datos reales
@@ -979,7 +990,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
 
             if not self.headless:
                 print("\n   El navegador sigue abierto para que revises el")
-                print("   resultado. Cuando termines, presioná Enter acá")
+                print("   resultado. Cuando termines, presiona Enter aquí")
                 print("   para cerrar.")
                 try:
                     input()
@@ -991,7 +1002,7 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             return self.succeeded
 
         except Exception as e:
-            print(f"\n💥 Error: {e}")
+            print(f"\nError: {e}")
             if self.page: await self._ss("error_fatal")
             if self.steps:
                 self.print_summary()
@@ -1000,5 +1011,5 @@ class AmelicaUploader(DomHelpersMixin, FrontMatterMixin, ReferencesMixin):
             if not keep_zip:
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
             else:
-                print(f"   📁 ZIP guardado en: {cleanup_dir}")
+                print(f"   ZIP guardado en: {cleanup_dir}")
             await self.stop()

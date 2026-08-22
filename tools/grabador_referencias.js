@@ -79,5 +79,5 @@
     }
   }, true);
 
-  console.log('%c🎥 Grabador de Referencias activo. Completá UNA referencia a mano y después corré: copy(window.__log)', 'color: green; font-weight: bold');
+  console.log('%cGrabador de Referencias activo. Completa UNA referencia a mano y después ejecuta: copy(window.__log)', 'color: green; font-weight: bold');
 })();

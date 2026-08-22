@@ -1170,7 +1170,7 @@ def build_index_zip(idml_path, output_zip_path):
 
         n_images = len(glob.glob(os.path.join(images_dir, "*")))
         size_kb = os.path.getsize(output_zip_path) / 1024
-        print(f"\n✅ Listo: {output_zip_path} ({size_kb:.0f} KB, {n_images} imagen(es))")
+        print(f"\nListo: {output_zip_path} ({size_kb:.0f} KB, {n_images} imagen(es))")
 
 
 def main():
@@ -1186,7 +1186,7 @@ def main():
     args = parser.parse_args()
 
     if not os.path.exists(args.idml):
-        print(f"❌ Archivo no encontrado: {args.idml}")
+        print(f"Archivo no encontrado: {args.idml}")
         sys.exit(1)
 
     output_zip = args.output

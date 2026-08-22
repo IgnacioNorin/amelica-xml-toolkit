@@ -50,7 +50,7 @@ def load_credentials() -> Credentials:
     try:
         data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
-        print(f"⚠️  No se pudo leer {CREDENTIALS_FILE.name}: {e}")
+        print(f"No se pudo leer {CREDENTIALS_FILE.name}: {e}")
         return env
 
     return Credentials(
