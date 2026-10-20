@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-app.py — Pequeña web local para convertir archivos .idml a index.zip
+app.py — Pequeña web local para convertir archivos .idml o .docx a index.zip
 (listos para AmeliCA) y subirlos directamente al portal.
 
 Uso:
@@ -22,6 +22,7 @@ pierden solas — no hay nada que "limpiar" en disco.
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,7 @@ for _stream in (sys.stdout, sys.stderr):
 from flask import Flask, request, jsonify, render_template_string
 
 from .converter import build_index_zip
+from ..parsing import build_zip_from_docx
 from ..config import PROJECT_ROOT
 
 app = Flask(__name__)
@@ -301,8 +303,8 @@ INDEX_HTML = """
 <body>
   <div class="pagina">
     <header class="encabezado">
-      <h1>Convertir .idml a AmeliCA</h1>
-      <div class="subtitulo">Convierte artículos de InDesign y súbelos al portal, todo desde aquí.</div>
+      <h1>Convertir artículos a AmeliCA</h1>
+      <div class="subtitulo">Convierte artículos de InDesign o Word y súbelos al portal, todo desde aquí.</div>
     </header>
 
     <div class="layout">
@@ -334,8 +336,8 @@ INDEX_HTML = """
         <h2>Convertir artículos <span class="chev">▾</span></h2>
         <div class="tarjeta-cuerpo">
           <div class="campo">
-            <label for="archivo">Archivos .idml (puedes elegir varios)</label>
-            <input type="file" id="archivo" accept=".idml" multiple>
+            <label for="archivo">Archivos .idml o .docx (puedes elegir varios)</label>
+            <input type="file" id="archivo" accept=".idml,.docx" multiple>
           </div>
 
           <div class="campo">
@@ -599,7 +601,7 @@ INDEX_HTML = """
       }
     });
 
-    // ── Convertir (uno o varios .idml de una) ────────────────────────
+    // ── Convertir (uno o varios .idml/.docx de una) ────────────────────────
     async function convertirUno(archivo) {
       const formData = new FormData();
       formData.append('archivo', archivo);
@@ -616,7 +618,7 @@ INDEX_HTML = """
 
       if (!archivos.length) {
         estado.className = 'estado error';
-        estado.textContent = 'Elige primero uno o más archivos .idml';
+        estado.textContent = 'Elige primero uno o más archivos .idml o .docx';
         return;
       }
 
@@ -1003,13 +1005,36 @@ def pick_zip_folder():
     return jsonify({"paths": zip_paths})
 
 
+# Extensiones que /convert sabe convertir a index.zip.
+EXTENSIONES_CONVERTIBLES = (".idml", ".docx")
+
+
+def _convertir_docx(docx_path, output_path):
+    """Convierte un .docx a index.zip en output_path.
+
+    build_zip_from_docx() deja index.html e index_archivos/ sueltos en la
+    carpeta que recibe, así que se le pasa una carpeta temporal y solo se
+    copia el index.zip final -- la carpeta del artículo queda igual que
+    con un .idml (únicamente index.zip)."""
+    with tempfile.TemporaryDirectory(prefix="docx_convert_") as tmpdir:
+        zip_tmp = build_zip_from_docx(docx_path, output_dir=tmpdir)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        shutil.copyfile(zip_tmp, output_path)
+
+
 @app.route("/convert", methods=["POST"])
 def convert():
     archivo = request.files.get("archivo")
     if not archivo or not archivo.filename:
-        return jsonify({"success": False, "error": "No se recibió ningún archivo .idml"}), 400
-    if not archivo.filename.lower().endswith(".idml"):
-        return jsonify({"success": False, "error": "El archivo debe tener extensión .idml"}), 400
+        return jsonify({"success": False, "error": "No se recibió ningún archivo .idml o .docx"}), 400
+    extension = os.path.splitext(archivo.filename)[1].lower()
+    if extension == ".doc":
+        return jsonify({"success": False, "error": (
+            "Los archivos .doc (Word 97-2003) no se pueden convertir: "
+            "ábrelo en Word y guárdalo como .docx"
+        )}), 400
+    if extension not in EXTENSIONES_CONVERTIBLES:
+        return jsonify({"success": False, "error": "El archivo debe tener extensión .idml o .docx"}), 400
 
     carpeta_destino = request.form.get("carpeta_destino", "").strip()
     if not carpeta_destino:
@@ -1024,12 +1049,15 @@ def convert():
     articulo_dir = os.path.join(carpeta_destino, base_name)
     output_path = os.path.join(articulo_dir, "index.zip")
 
-    with tempfile.TemporaryDirectory(prefix="idml_upload_") as tmpdir:
-        idml_temp_path = os.path.join(tmpdir, archivo.filename)
-        archivo.save(idml_temp_path)
+    with tempfile.TemporaryDirectory(prefix="convert_upload_") as tmpdir:
+        origen_temp_path = os.path.join(tmpdir, os.path.basename(archivo.filename))
+        archivo.save(origen_temp_path)
 
         try:
-            build_index_zip(idml_temp_path, output_path)
+            if extension == ".docx":
+                _convertir_docx(origen_temp_path, output_path)
+            else:
+                build_index_zip(origen_temp_path, output_path)
         except Exception as e:
             traceback.print_exc()
             return jsonify({"success": False, "error": f"{type(e).__name__}: {e}"}), 500

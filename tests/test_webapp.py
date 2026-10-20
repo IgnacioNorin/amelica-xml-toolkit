@@ -19,6 +19,7 @@ colección de tests para quien instaló el proyecto sin ese extra.
 
 import json
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -53,7 +54,7 @@ def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert "Convertir .idml a AmeliCA" in html
+    assert "Convertir artículos a AmeliCA" in html
     # Guarda contra HTML roto por un tag sin cerrar en un edit futuro.
     assert html.count("<div") == html.count("</div>")
 
@@ -197,10 +198,45 @@ def test_convert_sin_archivo(client):
 
 
 def test_convert_extension_invalida(client):
-    data = {"archivo": (BytesIO(b"contenido"), "articulo.docx")}
+    data = {"archivo": (BytesIO(b"contenido"), "articulo.pdf")}
     resp = client.post("/convert", data=data, content_type="multipart/form-data")
     assert resp.status_code == 400
-    assert ".idml" in resp.get_json()["error"]
+    error = resp.get_json()["error"]
+    assert ".idml" in error and ".docx" in error
+
+
+def test_convert_doc_viejo_da_mensaje_claro(client):
+    data = {"archivo": (BytesIO(b"contenido"), "articulo.doc")}
+    resp = client.post("/convert", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 400
+    assert "guárdalo como .docx" in resp.get_json()["error"]
+
+
+def test_convert_docx_deja_solo_index_zip(client, tmp_path, monkeypatch):
+    """Un .docx se convierte con build_zip_from_docx() y en la carpeta del
+    artículo queda solo index.zip, igual que con un .idml (sin el
+    index.html ni index_archivos/ intermedios)."""
+    def falso_build_zip_from_docx(docx_path, output_dir):
+        assert docx_path.endswith("Mi articulo.docx")
+        (Path(output_dir) / "index.html").write_text("<html></html>")
+        zip_p = Path(output_dir) / "index.zip"
+        zip_p.write_bytes(b"PK zip falso")
+        return str(zip_p)
+
+    monkeypatch.setattr(webapp_mod, "build_zip_from_docx", falso_build_zip_from_docx)
+    data = {
+        "archivo": (BytesIO(b"contenido"), "Mi articulo.docx"),
+        "carpeta_destino": str(tmp_path),
+    }
+    resp = client.post("/convert", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["success"] is True
+
+    articulo_dir = tmp_path / "Mi articulo"
+    assert Path(body["output_path"]) == articulo_dir / "index.zip"
+    assert [p.name for p in articulo_dir.iterdir()] == ["index.zip"]
+    assert (articulo_dir / "index.zip").read_bytes() == b"PK zip falso"
 
 
 def test_convert_carpeta_destino_inexistente(client):

@@ -14,9 +14,31 @@ import zipfile
 import html as htmlmod
 from pathlib import Path
 
+from .word_html import decodificar_html, normalizar_titulos_word, sacar_recuadros_del_resumen
+
 
 def _esc(t: str) -> str:
     return t.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _normalizar_html_de_word(html_p: str):
+    """Prepara un index.html de Word para el portal, conservando su
+    codificacion: titulos de seccion a <h1> y el recuadro "Sumario / Como
+    citar" fuera del resumen (ver word_html.py). No hace nada si el archivo
+    no es de Word."""
+    if not os.path.exists(html_p):
+        return
+    with open(html_p, 'rb') as f:
+        html, codificacion = decodificar_html(f.read())
+    html, convertidos = normalizar_titulos_word(html)
+    html, recuadros = sacar_recuadros_del_resumen(html)
+    if convertidos or recuadros:
+        with open(html_p, 'w', encoding=codificacion, newline='') as f:
+            f.write(html)
+    if convertidos:
+        print(f"   Titulos de seccion de Word convertidos a <h1>: {convertidos}")
+    if recuadros:
+        print(f"   Recuadro 'Sumario / Como citar' movido fuera del resumen")
 
 
 def fix_zip_for_amelica(src_zip: str) -> str:
@@ -26,6 +48,8 @@ def fix_zip_for_amelica(src_zip: str) -> str:
       - El ZIP se llama index.zip
       - La carpeta de recursos se llama index_files/ (no index_archivos/ ni cualquier otro nombre)
       - Todas las referencias internas en index.html y header.html son actualizadas
+      - Si el HTML es de Word, sus titulos de seccion pasan a <h1> (sin eso
+        el marcaje no encuentra ninguna seccion)
     """
     tmpdir = tempfile.mkdtemp(prefix='amelica_')
     extract_dir = os.path.join(tmpdir, 'extracted')
@@ -51,21 +75,18 @@ def fix_zip_for_amelica(src_zip: str) -> str:
         )
         print(f"   Carpeta renombrada: {resources_dir_old}/ → {resources_dir_new}/")
 
-        html_p = os.path.join(extract_dir, 'index.html')
-        if os.path.exists(html_p):
-            with open(html_p, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
-            content = content.replace(resources_dir_old + '/', resources_dir_new + '/')
-            with open(html_p, 'w', encoding='utf-8') as f:
-                f.write(content)
+        # Se respeta la codificacion de cada archivo: Word puede exportar en
+        # windows-1252, y leerlo/escribirlo como utf-8 rompia los acentos.
+        for p in (os.path.join(extract_dir, 'index.html'),
+                  os.path.join(extract_dir, resources_dir_new, 'header.html')):
+            if os.path.exists(p):
+                with open(p, 'rb') as f:
+                    content, codificacion = decodificar_html(f.read())
+                content = content.replace(resources_dir_old + '/', resources_dir_new + '/')
+                with open(p, 'w', encoding=codificacion, newline='') as f:
+                    f.write(content)
 
-        header_p = os.path.join(extract_dir, resources_dir_new, 'header.html')
-        if os.path.exists(header_p):
-            with open(header_p, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
-            content = content.replace(resources_dir_old + '/', resources_dir_new + '/')
-            with open(header_p, 'w', encoding='utf-8') as f:
-                f.write(content)
+    _normalizar_html_de_word(os.path.join(extract_dir, 'index.html'))
 
     zip_p = os.path.join(tmpdir, 'index.zip')
     with zipfile.ZipFile(zip_p, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -152,6 +173,8 @@ def build_zip_from_docx(docx_path: str, output_dir: str = None) -> str:
 
     if not os.path.exists(html_out):
         raise RuntimeError(f"No se pudo generar index.html desde {docx_path}")
+
+    _normalizar_html_de_word(html_out)
 
     # ── Empaquetar como index.zip ─────────────────────────────────────
     arc_dir = os.path.join(tmpdir, 'index_archivos')

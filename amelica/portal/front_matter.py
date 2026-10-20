@@ -220,6 +220,55 @@ class FrontMatterMixin:
 
         return ''
 
+    _MOTIVOS_PARRAFO = {
+        'sin-parrafo': 'el resumen no tiene párrafo',
+        'anidado': 'el párrafo pre-creado trae otro elemento adentro (p. ej. una tabla)',
+        'sin-campo': 'el párrafo pre-creado no tiene campo de texto propio',
+    }
+
+    async def _preparar_parrafo_de_resumen(self, resumen_handle) -> str:
+        """Deja listo para tipear el párrafo de un bloque de resumen: lo
+        vacía y le pone el foco. Devuelve 'ok', o el motivo por el que no se
+        puede escribir ahí sin riesgo (ver _MOTIVOS_PARRAFO).
+
+        Antes se tipeaba en el primer contenteditable que hubiera dentro del
+        párrafo. Con un artículo de Word (1328) el portal pre-creó el
+        párrafo con una "Tabla o cuadro" adentro, y el resumen terminó
+        escrito en el campo "Identificador" de esa tabla. Ahora solo se
+        escribe en el campo de texto que es hijo directo del párrafo, y si el
+        párrafo trae otro elemento anidado no se toca.
+        """
+        return await self.page.evaluate("""(r) => {
+            const p = r.querySelector('[title="Párrafo"]');
+            if (!p) return 'sin-parrafo';
+            // Hijos que son elementos del marcaje (tienen title) y no son
+            // los controles propios del párrafo.
+            const controles = new Set(['Mover', 'Cerrar']);
+            const anidado = [...p.querySelectorAll('[title]')].some(el =>
+                !controles.has(el.getAttribute('title')) &&
+                !el.matches('input[type="hidden"]'));
+            if (anidado) return 'anidado';
+            const span = [...p.children].find(el => el.matches('[contenteditable="true"]'));
+            if (!span) return 'sin-campo';
+            span.focus();
+            document.execCommand('selectAll', false, null);
+            document.execCommand('delete', false, null);
+            return 'ok';
+        }""", resumen_handle)
+
+    async def _buscar_resumen_por_idioma(self, lang: str):
+        """Handle del bloque de resumen visible cuyo xml:lang es `lang`
+        (null si no hay ninguno)."""
+        return await self.page.evaluate_handle("""(lang) => {
+            return [...document.querySelectorAll('[title^="Resumen"]')]
+                .filter(el => el.offsetParent !== null &&
+                              el.className.includes('abstract-'))
+                .find(el => {
+                    const campo = el.querySelector(':scope > [title^="xml:lang"]');
+                    return campo && campo.value === lang;
+                }) || null;
+        }""", lang)
+
     async def fill_front_matter(self, data: dict) -> bool:
         """Completa la pestaña 'Datos del artículo' en AmeliCA.
 
@@ -760,20 +809,16 @@ class FrontMatterMixin:
                 # Limpiar y tipear en el único párrafo DENTRO de r — mismo
                 # elemento para las dos operaciones, no uno para limpiar y
                 # otro (el "último de toda la página") para tipear.
-                span_ok = await self.page.evaluate("""(r) => {
-                    const span = r.querySelector('[title="Párrafo"] [contenteditable="true"]');
-                    if (!span) return false;
-                    span.focus();
-                    document.execCommand('selectAll', false, null);
-                    document.execCommand('delete', false, null);
-                    return true;
-                }""", r_handle)
-                if span_ok:
+                estado = await self._preparar_parrafo_de_resumen(r_handle)
+                if estado == 'ok':
                     await asyncio.sleep(0.2)
                     await self.page.keyboard.type(abstract_primary['text'], delay=8)
                     print(f"      Tipeado en el párrafo de '{r_titulo}'")
                 else:
-                    print("      Sin párrafo editable dentro del resumen pre-creado")
+                    print(f"      Párrafo del resumen pre-creado no apto ({estado}): no se tipea")
+                    self._fm_problemas.append(
+                        f"resumen principal: {self._MOTIVOS_PARRAFO.get(estado, estado)} — "
+                        "complétalo a mano")
             else:
                 # Sin el pre-creado identificado: mejor no tocar párrafos
                 # ajenos a ciegas (esa era la causa del bug). Se avisa y se
@@ -788,24 +833,43 @@ class FrontMatterMixin:
                 print(f"\n   Resumen secundario {lang.upper()} "
                       f"({len(abstract_secondary['text'])} chars)")
 
-                await self._click_caja('Resúmenes')
-                if await self._click_menu_button('Resumen en otro idioma'):
-                    await asyncio.sleep(0.4)
-                    await self._click_caja('Resumen')
-                    lang_set = await self.page.evaluate("""(lang) => {
-                        const sel = [...document.querySelectorAll('select')]
-                            .filter(el => el.offsetParent !== null &&
-                                          el.className.includes('xml:lang-'))
-                            .at(-1);
-                        if (!sel) return 'no-select';
-                        sel.value = lang;
-                        sel.dispatchEvent(new Event('change', {bubbles: true}));
-                        return 'ok-' + lang;
-                    }""", lang)
-                    print(f"      Idioma: {lang_set}")
-                    await asyncio.sleep(0.3)
-                    await self._click_caja('Párrafo')
-                    await self._type_in_caja_contenido('Párrafo', abstract_secondary['text'])
+                # El portal a veces ya trae pre-creado el resumen en el otro
+                # idioma (pasó con un artículo de Word, 1328): crear otro con
+                # el botón lo duplicaba. Si existe, se reusa.
+                existente = await self._buscar_resumen_por_idioma(lang)
+                titulo_existente = await self.page.evaluate(
+                    "r => r ? r.getAttribute('title') : null", existente)
+                if titulo_existente:
+                    print(f"      Ya existe '{titulo_existente}': se reusa en vez de crear otro")
+                    estado = await self._preparar_parrafo_de_resumen(existente)
+                    if estado == 'ok':
+                        await asyncio.sleep(0.2)
+                        await self.page.keyboard.type(abstract_secondary['text'], delay=8)
+                        print(f"      Tipeado en el párrafo de '{titulo_existente}'")
+                    else:
+                        print(f"      Párrafo no apto ({estado}): no se tipea")
+                        self._fm_problemas.append(
+                            f"resumen {lang.upper()}: {self._MOTIVOS_PARRAFO.get(estado, estado)} — "
+                            "complétalo a mano")
+                else:
+                    await self._click_caja('Resúmenes')
+                    if await self._click_menu_button('Resumen en otro idioma'):
+                        await asyncio.sleep(0.4)
+                        await self._click_caja('Resumen')
+                        lang_set = await self.page.evaluate("""(lang) => {
+                            const sel = [...document.querySelectorAll('select')]
+                                .filter(el => el.offsetParent !== null &&
+                                              el.className.includes('xml:lang-'))
+                                .at(-1);
+                            if (!sel) return 'no-select';
+                            sel.value = lang;
+                            sel.dispatchEvent(new Event('change', {bubbles: true}));
+                            return 'ok-' + lang;
+                        }""", lang)
+                        print(f"      Idioma: {lang_set}")
+                        await asyncio.sleep(0.3)
+                        await self._click_caja('Párrafo')
+                        await self._type_in_caja_contenido('Párrafo', abstract_secondary['text'])
 
 
 

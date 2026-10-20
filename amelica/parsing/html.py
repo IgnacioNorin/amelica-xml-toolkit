@@ -11,6 +11,10 @@ import zipfile
 import html as htmlmod
 from pathlib import Path
 
+from .word_html import (
+    decodificar_html, es_html_de_word, extraer_datos_basicos_word, extraer_portada_word,
+)
+
 
 def _primary_language(html: str) -> str:
     """Determina cual es el idioma PRINCIPAL del articulo mirando cual
@@ -54,9 +58,14 @@ def extract_article_data_from_html(zip_path: str) -> dict:
             html_name = next((n for n in zf.namelist() if n.endswith('index.html')), None)
             if not html_name:
                 return defaults
-            html = zf.read(html_name).decode('utf-8', errors='replace')
+            html, _ = decodificar_html(zf.read(html_name))
     except Exception:
         return defaults
+
+    # El HTML de Word no trae las clases del conversor de InDesign: se lee
+    # la portada por su formato (ver word_html.py).
+    if es_html_de_word(html):
+        return extraer_datos_basicos_word(html)
 
     # Titulo: el primer <p class="... article-title ..."> es el titulo en
     # español (o el unico, si el articulo esta solo en ingles). Se le saca
@@ -119,7 +128,10 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
 
     with zipfile.ZipFile(zip_path, 'r') as zf:
         html_name = next((n for n in zf.namelist() if n.endswith('index.html')), None)
-        html = zf.read(html_name).decode('utf-8', errors='replace')
+        html, _ = decodificar_html(zf.read(html_name))
+
+    if es_html_de_word(html):
+        return extraer_portada_word(html)
 
     data = {
         'titles': [], 'authors': [], 'affiliations': {}, 'dates': {},

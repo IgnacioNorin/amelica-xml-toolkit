@@ -67,11 +67,32 @@ from .portal import AmelicaUploader
 # Subcomandos
 # ─────────────────────────────────────────────
 
+MENSAJE_DOC = ("Los archivos .doc (Word 97-2003) no se aceptan: ábrelo en Word "
+               "y guárdalo como .docx (o exporta el index.zip).")
+
+
+def _validar_entrada(input_path: Path, permitidas: tuple) -> bool:
+    """Imprime un error claro y devuelve False si la extensión no es una
+    de las permitidas. Sin esto, cualquier cosa que no fuera .zip caía en
+    la rama .docx y reventaba con un error poco claro de python-docx."""
+    extension = input_path.suffix.lower()
+    if extension in permitidas:
+        return True
+    if extension == '.doc':
+        print(MENSAJE_DOC)
+    else:
+        print(f"Extensión no soportada: '{input_path.suffix}'. "
+              f"Se acepta: {', '.join(permitidas)}")
+    return False
+
+
 async def cmd_upload(args):
     """Sube un artículo (ZIP o DOCX) al portal AmeliCA."""
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"Archivo no encontrado: {input_path}")
+        sys.exit(1)
+    if not _validar_entrada(input_path, ('.zip', '.docx')):
         sys.exit(1)
 
     saved_email, saved_password, saved_volume = load_credentials()
@@ -126,6 +147,11 @@ async def cmd_batch(args):
     """Sube todos los ZIPs/DOCXs de una carpeta."""
     folder = Path(args.folder)
     files  = sorted(list(folder.glob('*.zip')) + list(folder.glob('*.docx')))
+    docs_viejos = sorted(folder.glob('*.doc'))
+    if docs_viejos:
+        print(f"Se omiten {len(docs_viejos)} archivo(s) .doc: {MENSAJE_DOC}")
+        for d in docs_viejos:
+            print(f"   {d.name}")
 
     if not files:
         print(f"No hay archivos .zip ni .docx en: {folder}")
@@ -240,6 +266,8 @@ def cmd_zip(args):
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"Archivo no encontrado: {input_path}"); return 1
+    if not _validar_entrada(input_path, ('.docx',)):
+        return 1
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nConvirtiendo: {input_path.name}")

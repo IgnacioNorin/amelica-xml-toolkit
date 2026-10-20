@@ -9,7 +9,7 @@ secciones y completa los datos del artículo — sin hacerlo a mano.
 > **Nota**: esto automatiza un portal específico (AmeliCA XML). Para
 > probar el flujo completo hace falta una cuenta real ahí, con acceso de
 > editor a alguna revista. Sin cuenta, igual se puede: correr `pytest`
-> (142 tests, no necesitan portal ni credenciales), o leer el código del
+> (169 tests, no necesitan portal ni credenciales), o leer el código del
 > parser (`amelica/parsing/`), que es puro y se prueba solo.
 
 ## Instalación
@@ -73,6 +73,9 @@ amelica upload articulo.docx
 # Solo generar el ZIP, sin subir nada — para inspeccionarlo
 amelica zip articulo.docx -o ./salida/
 
+# Los .doc (Word 97-2003) no se aceptan: hay que guardarlos como .docx
+# antes. `batch` los omite y avisa cuáles se saltó.
+
 # Sobreescribir metadatos detectados automáticamente
 amelica upload index.zip --titulo "Mi título" --idioma Inglés \
                          --pagina-inicio 1 --pagina-fin 15
@@ -80,9 +83,9 @@ amelica upload index.zip --titulo "Mi título" --idioma Inglés \
 
 También funciona sin instalar: `python -m amelica upload index.zip`.
 
-### Convertir .idml y subir desde una web local
+### Convertir .idml/.docx y subir desde una web local
 
-Para artículos que llegan como InDesign, o para manejar varios artículos
+Para artículos que llegan como InDesign o Word, o para manejar varios artículos
 a la vez sin usar la terminal:
 
 ```bash
@@ -93,7 +96,11 @@ Requiere el extra `idml` (`pip install -e ".[idml]"`). Todo corre en tu
 propia máquina — nada se sube a ningún servidor externo salvo el portal
 AmeliCA en sí. Qué hace:
 
-- **Convertir** uno o varios `.idml` a `index.zip` de una.
+- **Convertir** uno o varios `.idml` o `.docx` a `index.zip` de una. Los
+  `.docx` usan la misma conversión que `amelica zip` (Word si está
+  instalado, si no LibreOffice o el conversor propio). Para mejor calidad
+  con Word, sigue conviniendo exportar el `index.zip` a mano y agregarlo
+  con "Agregar ZIP ya hecho".
 - **Cola de subida** reordenable (arrastrando o escribiendo la posición),
   con botón para subir todo en orden — correrlas en paralelo rompe el
   portal (dos sesiones con la misma cuenta chocan entre sí), así que
@@ -141,6 +148,7 @@ amelica/
   parsing/          Parseo puro, sin navegador — testeable offline
     docx.py           Metadatos desde .docx
     html.py           Metadatos desde el index.html del ZIP
+    word_html.py      Lo mismo para el HTML exportado desde Word
     references.py     Parser de referencias APA
     zip_tools.py      DOCX -> index.zip y correcciones del ZIP de Word
   portal/           Automatización con Playwright
@@ -152,7 +160,7 @@ amelica/
   idml/             Conversor .idml -> index.zip + web local
     converter.py      Conversor .idml -> index.zip
     webapp.py         Web local: convertir, cola de subida, historial
-tests/              142 tests: parser, DOM del portal, y la web local
+tests/              169 tests: parser, CLI, DOM del portal, y la web local
 fixtures/           ZIPs reales usados por los tests
 ```
 
@@ -168,8 +176,9 @@ Playwright ni de la red, así que se puede testear sin abrir un navegador.
 | Parser de referencias | Validado: 376 refs sobre 12 artículos, con tests |
 | Marcaje de secciones | **Verificado en vivo**: guardado confirmado (click + spinner de JSF) en varias corridas reales |
 | Datos del artículo (front matter) | **Verificado en vivo**: completado de punta a punta en corridas reales, incluidos autores, ORCID, fechas, resúmenes y DOI |
+| Artículos desde Word (`parsing/word_html.py`) | **Probado sin portal** contra un artículo real exportado desde Word: títulos de sección, portada completa y secciones a marcar. Falta una corrida real en el portal |
 | Llenado de referencias en el portal | **Experimental, apagado por defecto** |
-| Web local (`idml/webapp.py`) | **Verificado en vivo**: cola, panel de progreso, historial y recuperación al recargar, con 33 tests propios (endpoints Flask + lógica JS) |
+| Web local (`idml/webapp.py`) | **Verificado en vivo**: cola, panel de progreso, historial y recuperación al recargar, con 35 tests propios (endpoints Flask + lógica JS) |
 
 ### Flujo completo verificado en vivo (2026-08-20)
 
@@ -242,7 +251,7 @@ pip install -e ".[dev,idml]"
 pytest
 ```
 
-142 tests en total, sin abrir ningún navegador ni tocar el portal real:
+169 tests en total, sin abrir ningún navegador ni tocar el portal real:
 
 - **Parser y DOM del portal** (`amelica/parsing/`, `amelica/portal/`): tests
   de regresión sobre `fixtures/` que fijan el rendimiento medido del parser
@@ -272,6 +281,12 @@ los dos rompe la colección de tests para quien instaló sin esos extras.
   cursiva (ver `articulo_12.zip`).
 - La conversión DOCX vía Word solo funciona en Windows con Word instalado;
   si no está, cae al conversor propio, de menor calidad.
+- La portada de un artículo de Word se lee por su formato, no por marcas
+  propias: títulos en negrita con la fuente más grande, autores con número
+  de afiliación en superíndice, afiliación con la institución en cursiva.
+  Una plantilla muy distinta a la de la revista puede necesitar ajustes.
+  Si el parser detecta algo raro (por ejemplo, dos autores con el mismo
+  ORCID), lo avisa en vez de seguir en silencio.
 - La web local recupera trabajos en curso si se recarga su propia pestaña,
   pero no puede revivir la ventana de Chromium que abre `--show` si se
   cierra manualmente -- Playwright pierde el control del navegador ahí
