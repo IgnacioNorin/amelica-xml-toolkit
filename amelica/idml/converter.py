@@ -472,16 +472,77 @@ def unescape(s):
              .replace("&apos;", "'").replace("&quot;", '"'))
 
 
+# Formatting defined by each IDML character style (Resources/Styles.xml),
+# e.g. {"CharacterStyle/RTE_Bold": {"FontStyle": "Bold"}}. Filled by
+# load_character_styles at the start of each conversion.
+_CHAR_STYLE_FORMAT = {}
+_CHAR_STYLE_KEYS = ("FontStyle", "Position", "PointSize")
+
+
+def load_character_styles(styles_xml_path):
+    """Read the IDML character styles and store the formatting each one
+    defines (bold/italic, superscript/subscript, size), resolving BasedOn
+    inheritance.
+
+    Some IDML files do not mark formatting with local attributes on each
+    CharacterStyleRange (FontStyle="Bold", Position="Superscript") but with
+    named styles (CharacterStyle/RTE_Bold, RTE_Sup, RTE_Italic) whose
+    formatting only lives in Styles.xml. Confirmed with 1602-RTE-38-E1:
+    without this the title was not detected (no bold), affiliation numbers
+    came out as plain text and every italic was lost."""
+    _CHAR_STYLE_FORMAT.clear()
+    try:
+        with open(styles_xml_path, encoding="utf-8") as f:
+            xml = f.read()
+    except OSError:
+        return
+
+    own, parent = {}, {}
+    style_pattern = re.compile(
+        r'<CharacterStyle Self="([^"]*)"([^>]*?)(?:/>|>(.*?)</CharacterStyle>)', re.DOTALL
+    )
+    for self_id, attrs, inner in style_pattern.findall(xml):
+        own[self_id] = {
+            k: m.group(1) for k in _CHAR_STYLE_KEYS
+            if (m := re.search(rf'\b{k}="([^"]*)"', attrs))
+        }
+        based_on = re.search(r'<BasedOn type="object">([^<]*)</BasedOn>', inner or "")
+        if based_on:
+            parent[self_id] = based_on.group(1)
+
+    def resolve(style_id, seen):
+        if style_id in seen or style_id not in own:
+            return {}
+        fmt = dict(resolve(parent[style_id], seen | {style_id})) if style_id in parent else {}
+        fmt.update(own[style_id])
+        return fmt
+
+    for style_id in own:
+        fmt = resolve(style_id, frozenset())
+        if fmt:
+            _CHAR_STYLE_FORMAT[style_id] = fmt
+
+
+def _effective_char_attrs(style_id, attrs):
+    """Add the formatting of the run's character style to its local
+    attributes. Local attributes win, since they are overrides."""
+    for key, value in _CHAR_STYLE_FORMAT.get(style_id, {}).items():
+        if f'{key}="' not in attrs:
+            attrs += f' {key}="{value}"'
+    return attrs
+
+
 def extract_runs(body):
     """Extrae los runs de un parrafo. Un CharacterStyleRange puede contener VARIOS
     <Content> separados por <Br/> en su interior (no solo uno) -- hay que partir ahi
     para no pegar texto de lados distintos del salto de linea."""
     runs = []
     char_pattern = re.compile(
-        r'<CharacterStyleRange AppliedCharacterStyle="[^"]*"([^>]*)>(.*?)</CharacterStyleRange>',
+        r'<CharacterStyleRange AppliedCharacterStyle="([^"]*)"([^>]*)>(.*?)</CharacterStyleRange>',
         re.DOTALL
     )
-    for attrs, inner in char_pattern.findall(body):
+    for style_id, attrs, inner in char_pattern.findall(body):
+        attrs = _effective_char_attrs(style_id, attrs)
         is_bold = 'FontStyle="Bold' in attrs
         is_italic = 'Italic' in attrs
         size_match = re.search(r'PointSize="([\d.]+)"', attrs)
@@ -801,11 +862,14 @@ def convert_story(path, html_parts, images_dir):
             and any(r["bold"] and (r["size"] or 0) >= 15 for r in runs)
         )
         if looks_like_title:
-            title_runs = [r for r in runs if r["bold"] and (r["size"] or 0) >= 15]
+            # The <Br/> between the two titles may sit in a run that is not
+            # bold/large (confirmed in 1645-RTE-38-E1), so every run's break
+            # splits groups, but only bold/large runs contribute text.
             groups, current = [], []
-            for r in title_runs:
-                current.append(r)
-                if r["break_after"]:
+            for r in runs:
+                if r["bold"] and (r["size"] or 0) >= 15:
+                    current.append(r)
+                if r["break_after"] and current:
                     groups.append(current)
                     current = []
             if current:
@@ -1136,6 +1200,8 @@ def build_index_zip(idml_path, output_zip_path):
                 f"No se encontró la carpeta Stories/ dentro de {idml_path} -- "
                 "¿es un .idml valido? (Archivo > Exportar > InDesign Markup en InDesign)"
             )
+
+        load_character_styles(os.path.join(extract_dir, "Resources", "Styles.xml"))
 
         out_dir = os.path.join(tmpdir, "index_zip_contents")
         images_dir = os.path.join(out_dir, IMAGES_REL_PREFIX)

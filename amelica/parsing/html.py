@@ -91,7 +91,8 @@ def extract_article_data_from_html(zip_path: str) -> dict:
     cite_match = re.search(r'(?:Como citar|How to cite).*?</p>', html, re.DOTALL | re.IGNORECASE)
     if cite_match:
         cite_text = re.sub(r'<[^>]+>', '', cite_match.group(0))
-        pages_match = re.search(r'\(\d+\)\s*,\s*(\d+)\s*[-–—]\s*(\d+)', cite_text)
+        # The issue may be non-numeric, e.g. a special issue "38(E1), 136-152".
+        pages_match = re.search(r'\(\w+\)\s*,\s*(\d+)\s*[-–—]\s*(\d+)', cite_text)
         if pages_match:
             page_start, page_end = pages_match.group(1), pages_match.group(2)
 
@@ -160,7 +161,7 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
             author_html = html[p_start:p_end]
 
     if author_html:
-        name_num_pattern = re.compile(r'([A-ZÁÉÍÓÚÑ][^<,"=]*?)<span[^>]*>(\d+)</span>')
+        name_num_pattern = re.compile(r'([A-ZÁÉÍÓÚÑ][^<,"=]*?)<span[^>]*>\s*(\d+)\s*</span>')
         name_matches = list(name_num_pattern.finditer(author_html))
         # El ORCID de cada autor se busca en el tramo de HTML entre su
         # nombre y el del siguiente autor (no con una lista aparte
@@ -184,10 +185,12 @@ def extract_full_article_data_from_html(zip_path: str) -> dict:
         table_idx = html.find('<table', start)
         affil_block = html[start:table_idx] if table_idx != -1 else html[start:start + 3000]
 
-        affil_starts = list(re.finditer(r'<span[^>]*>(\d+)</span><em>(.*?)</em>,\s*([^<]*)', affil_block))
+        affil_starts = list(re.finditer(r'<span[^>]*>\s*(\d+)\s*</span>(?:<span[^>]*>\s*</span>)?<em>(.*?)</em>,?\s*([^<]*)', affil_block))
         for i, m in enumerate(affil_starts):
             num = m.group(1)
-            name = _clean(m.group(2))
+            # The separating comma sometimes sits inside the <em> (confirmed
+            # in 1603-RTE-38-E1), so it is stripped from the name.
+            name = _clean(m.group(2)).rstrip(', ')
             country = _clean(m.group(3)).rstrip('.').strip()
             seg_start = m.end()
             seg_end = affil_starts[i + 1].start() if i + 1 < len(affil_starts) else len(affil_block)

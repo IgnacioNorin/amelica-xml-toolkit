@@ -488,7 +488,7 @@ def extraer_datos_basicos_word(html: str) -> dict:
     # descarta, asi que se busca sobre el HTML completo.
     cita = re.search(r'(?:Como citar|Cómo citar|How to cite).*?</p>', html, re.DOTALL | re.IGNORECASE)
     if cita:
-        paginas = re.search(r'\(\d+\)\s*,\s*(\d+)\s*[-–—]\s*(\d+)', _texto(cita.group(0)))
+        paginas = re.search(r'\(\w+\)\s*,\s*(\d+)\s*[-–—]\s*(\d+)', _texto(cita.group(0)))
         if paginas:
             page_start, page_end = paginas.group(1), paginas.group(2)
 
